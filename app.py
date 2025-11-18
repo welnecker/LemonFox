@@ -1,4 +1,3 @@
-import io
 import requests
 import streamlit as st
 
@@ -9,9 +8,9 @@ import streamlit as st
 # API LemonFox
 LEMONFOX_API_URL = "https://api.lemonfox.ai/v1/images/generations"
 
-# API Hugging Face Inference
-HF_API_BASE_URL = "https://api-inference.huggingface.co/models"
-HF_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"  # pode trocar se quiser outro modelo
+# API Hugging Face Inference (NOVO endpoint)
+HF_API_URL = "https://router.huggingface.co/hf-inference"
+HF_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"  # você pode trocar por outro modelo depois
 
 # Senha simples de acesso à página
 PASSWORD = "1234"  # 🔒 TROQUE para outra senha antes de publicar
@@ -69,12 +68,13 @@ def baixar_bytes_imagem(url: str) -> bytes:
 
 
 # =========================
-# FUNÇÕES – HUGGING FACE
+# FUNÇÕES – HUGGING FACE (router.huggingface.co)
 # =========================
 
 def gerar_imagens_hf(prompt, prompt_negativo, n, tamanho, hf_token):
     """
-    Chama a API de Inference da Hugging Face para gerar imagens.
+    Chama a API de Inference da Hugging Face (router.huggingface.co)
+    para gerar imagens com o modelo HF_MODEL_ID.
     Retorna uma lista de bytes (cada item é o conteúdo da imagem).
     """
     headers = {
@@ -89,16 +89,15 @@ def gerar_imagens_hf(prompt, prompt_negativo, n, tamanho, hf_token):
         width = int(w_str)
         height = int(h_str)
     except Exception:
-        # fallback padrão
         width, height = 1024, 1024
 
-    url = f"{HF_API_BASE_URL}/{HF_MODEL_ID}"
-
+    url = HF_API_URL
     imagens_bytes = []
 
-    # Alguns modelos suportam num_images_per_prompt; para evitar dor de cabeça, geramos 1 por vez.
+    # Para evitar dor de cabeça, geramos 1 por vez no loop
     for i in range(n):
         payload = {
+            "model": HF_MODEL_ID,
             "inputs": prompt,
             "parameters": {
                 "negative_prompt": prompt_negativo or "",
@@ -113,7 +112,6 @@ def gerar_imagens_hf(prompt, prompt_negativo, n, tamanho, hf_token):
 
         if resp.status_code != 200:
             st.error(f"Erro da API Hugging Face (status {resp.status_code}) na imagem {i+1}")
-            # Muitas vezes vem texto explicando o erro
             try:
                 st.code(resp.text, language="json")
             except Exception:
@@ -129,8 +127,10 @@ def gerar_imagens_hf(prompt, prompt_negativo, n, tamanho, hf_token):
 # APP STREAMLIT
 # =========================
 
-st.set_page_config(page_title="Gerador de Imagens – LemonFox / Hugging Face",
-                   page_icon="🖼️")
+st.set_page_config(
+    page_title="Gerador de Imagens – LemonFox / Hugging Face",
+    page_icon="🖼️"
+)
 
 st.title("🖼️ Gerador de Imagens")
 st.caption("App privado para testes – protegido por senha simples.")
@@ -282,5 +282,4 @@ if gerar:
 
         except Exception as e:
             st.error(f"Falha ao gerar imagens: {e}")
-            # gerar_imagens_* já mostra detalhes do erro
             st.stop()
