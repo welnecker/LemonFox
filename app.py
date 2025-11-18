@@ -42,8 +42,11 @@ LEMONFOX_URL = "https://api.lemonfox.ai/v1/images/generations"
 HF_MODEL_FLUX = "black-forest-labs/FLUX.1-dev"
 HF_API_BASE_URL = "https://router.huggingface.co/hf-inference/models"  # /<MODEL_ID>
 
-# Hugging Face – Qwen Image via InferenceClient (fal-ai provider)
+# Hugging Face – Qwen Image via InferenceClient (fal-ai)
 QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
+
+# Hugging Face – Playground v2.5 via InferenceClient (fal-ai)
+PLAYGROUND_MODEL = "playgroundai/playground-v2.5-1024px-aesthetic"
 
 # =========================
 # PROMPTS DA LAURA – HQ BIQUÍNI
@@ -105,7 +108,6 @@ def download_button_from_pil(img: Image.Image, filename: str, label: str):
 def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
     """
     Gera imagens via LemonFox SDXL.
-    Usa a convenção de parâmetros baseada na doc que você colou.
     Retorna uma lista de URLs.
     """
     if not LEMONFOX_API_KEY:
@@ -119,8 +121,8 @@ def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: 
     payload = {
         "prompt": prompt,
         "n": n,
-        "tamanho": size,              # conforme doc deles
-        "formato_de_resposta": "url", # conforme doc
+        "tamanho": size,
+        "formato_de_resposta": "url",
     }
 
     if negative_prompt:
@@ -141,7 +143,6 @@ def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: 
 def gerar_imagens_flux_router(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
     """
     Gera imagens via Hugging Face Router com o modelo FLUX.1-dev.
-    Endpoint: https://router.huggingface.co/hf-inference/models/<MODEL_ID>
     Retorna lista de PIL.Image.
     """
     if not HF_TOKEN:
@@ -206,16 +207,44 @@ def gerar_imagens_qwen(prompt: str, negative_prompt: str, n: int = 1):
         api_key=HF_TOKEN,
     )
 
-    imagens = []
-    # Se quiser forçar o negativo, pode concatenar no prompt.
     full_prompt = prompt
     if negative_prompt:
         full_prompt = f"{prompt}. Avoid: {negative_prompt}"
 
+    imagens = []
     for i in range(n):
         img = client.text_to_image(
             prompt=full_prompt,
             model=QWEN_IMAGE_MODEL,
+        )
+        imagens.append(img)
+
+    return imagens
+
+
+def gerar_imagens_playground(prompt: str, negative_prompt: str, n: int = 1):
+    """
+    Gera imagens usando playgroundai/playground-v2.5-1024px-aesthetic
+    via InferenceClient (provider fal-ai).
+    Retorna lista de PIL.Image.
+    """
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
+
+    client = InferenceClient(
+        provider="fal-ai",
+        api_key=HF_TOKEN,
+    )
+
+    full_prompt = prompt
+    if negative_prompt:
+        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
+
+    imagens = []
+    for i in range(n):
+        img = client.text_to_image(
+            prompt=full_prompt,
+            model=PLAYGROUND_MODEL,
         )
         imagens.append(img)
 
@@ -234,6 +263,7 @@ provider = st.radio(
         "LemonFox (SDXL)",
         "Hugging Face – FLUX.1-dev (Router)",
         "Hugging Face – Qwen-Image (fal-ai)",
+        "Hugging Face – Playground v2.5 (fal-ai)",
     ],
     index=1,
 )
@@ -307,7 +337,7 @@ if st.button("🚀 Gerar imagens da Laura"):
                     st.image(img, use_column_width=True)
                     download_button_from_pil(img, f"laura_flux_{idx}.png", f"⬇️ Baixar imagem {idx}")
 
-        else:  # Qwen-Image
+        elif "Qwen-Image" in provider:
             if not HF_TOKEN:
                 st.error("HF_TOKEN não configurado nos secrets.")
                 st.stop()
@@ -322,6 +352,22 @@ if st.button("🚀 Gerar imagens da Laura"):
                     st.markdown(f"### Imagem {idx}")
                     st.image(img, use_column_width=True)
                     download_button_from_pil(img, f"laura_qwen_{idx}.png", f"⬇️ Baixar imagem {idx}")
+
+        else:  # Playground v2.5
+            if not HF_TOKEN:
+                st.error("HF_TOKEN não configurado nos secrets.")
+                st.stop()
+
+            st.info(f"Chamando Hugging Face – Playground v2.5 via fal-ai ...")
+            imagens = gerar_imagens_playground(prompt_positivo, prompt_negativo, n=qtd)
+
+            if not imagens:
+                st.warning("Playground v2.5 não retornou imagens.")
+            else:
+                for idx, img in enumerate(imagens, start=1):
+                    st.markdown(f"### Imagem {idx}")
+                    st.image(img, use_column_width=True)
+                    download_button_from_pil(img, f"laura_playground_{idx}.png", f"⬇️ Baixar imagem {idx}")
 
     except Exception as e:
         st.error(f"Falha ao gerar imagens: {e}")
