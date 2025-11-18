@@ -1,285 +1,255 @@
+import os
+import base64
+import io
 import requests
+from PIL import Image
 import streamlit as st
 
 # =========================
 # CONFIGURAÇÕES GERAIS
 # =========================
 
-# API LemonFox
-LEMONFOX_API_URL = "https://api.lemonfox.ai/v1/images/generations"
+st.set_page_config(
+    page_title="Laura Image Studio",
+    page_icon="🖼️",
+    layout="centered"
+)
 
-# API Hugging Face Inference (NOVO endpoint)
-HF_API_URL = "https://router.huggingface.co/hf-inference"
-HF_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"  # você pode trocar por outro modelo depois
+# ---- Senha simples de acesso ----
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", "1234")
 
-# Senha simples de acesso à página
-PASSWORD = "1234"  # 🔒 TROQUE para outra senha antes de publicar
+st.title("🖼️ Laura Image Studio")
+
+senha = st.text_input("Senha de acesso", type="password")
+if senha != APP_PASSWORD:
+    st.warning("Digite a senha correta para acessar o gerador de imagens.")
+    st.stop()
+
+st.success("Acesso liberado!")
+
+# ---- Chaves das APIs nos secrets ----
+LEMONFOX_API_KEY = st.secrets.get("LEMONFOX_API_KEY", "")
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+
+# =========================
+# MODELOS / CONSTANTES
+# =========================
+
+# LemonFox (SDXL)
+LEMONFOX_URL = "https://api.lemonfox.ai/v1/images/generations"
+
+# Hugging Face Inference – agora com endpoint CORRETO
+HF_MODEL_ID = "black-forest-labs/FLUX.1-dev"
+HF_API_BASE_URL = "https://router.huggingface.co/hf-inference/models"  # base
+# URL final será: f"{HF_API_BASE_URL}/{HF_MODEL_ID}"
 
 
 # =========================
-# FUNÇÕES – LEMONFOX
+# PROMPTS DA LAURA
 # =========================
 
-def gerar_imagens_lemonfox(prompt, prompt_negativo, n, tamanho, api_key):
-    """
-    Chama a API do LemonFox para gerar imagens.
-    Retorna uma lista de URLs.
-    Em caso de erro, mostra o corpo da resposta para debug.
-    """
+PROMPT_LAURA_BIQUINI = (
+    "beautiful young woman named Laura, 25 years old, redhead ponytail, "
+    "curvy body, full hips and round butt, medium big breasts, "
+    "wearing a tiny Brazilian bikini on the beach, confident pose, "
+    "warm sunlight, dramatic shadows, highly detailed, 8k, "
+    "photorealistic, cinematic lighting"
+)
+
+NEGATIVE_LAURA_DEFAULT = (
+    "ugly, deformed, extra limbs, bad anatomy, lowres, blurry, "
+    "text, watermark, logo, disfigured face, mutated hands, "
+    "cartoon, anime, sketch, low quality"
+)
+
+
+# =========================
+# FUNÇÕES AUXILIARES
+# =========================
+
+def baixar_imagem(url: str) -> Image.Image:
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    return Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+
+def exibir_download(imagem: Image.Image, nome_arquivo: str):
+    buf = io.BytesIO()
+    imagem.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    href = f'<a download="{nome_arquivo}" href="data:file/png;base64,{b64}">⬇️ Baixar imagem</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+
+# =========================
+# CHAMADAS ÀS APIS
+# =========================
+
+def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
+    if not LEMONFOX_API_KEY:
+        raise RuntimeError("LEMONFOX_API_KEY não encontrado em st.secrets.")
+
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {LEMONFOX_API_KEY}",
         "Content-Type": "application/json",
     }
 
     payload = {
         "prompt": prompt,
+        "negative_prompt": negative_prompt or None,
         "n": n,
-        "tamanho": tamanho,
-        "formato_de_resposta": "url",
+        "size": size,
+        "response_format": "url",
     }
 
-    if prompt_negativo:
-        payload["prompt_negativo"] = prompt_negativo
+    resp = requests.post(LEMONFOX_URL, headers=headers, json=payload, timeout=120)
 
-    resp = requests.post(LEMONFOX_API_URL, json=payload, headers=headers)
-
-    # Tratamento de erro com debug
     if resp.status_code != 200:
         st.error(f"Erro da API LemonFox (status {resp.status_code})")
-        try:
-            st.code(resp.text, language="json")
-        except Exception:
-            st.write(resp.text)
-        raise Exception(f"Erro da API LemonFox: {resp.status_code}")
+        st.code(resp.text)
+        raise RuntimeError(f"Falha LemonFox: {resp.status_code}")
 
     data = resp.json()
     urls = [item["url"] for item in data.get("data", [])]
     return urls
 
 
-def baixar_bytes_imagem(url: str) -> bytes:
+def gerar_imagens_hf(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
     """
-    Faz o download da imagem a partir da URL.
-    Retorna os bytes da imagem.
-    """
-    r = requests.get(url)
-    r.raise_for_status()
-    return r.content
+    Geração via Hugging Face Inference (router.huggingface.co).
 
-
-# =========================
-# FUNÇÕES – HUGGING FACE (router.huggingface.co)
-# =========================
-
-def gerar_imagens_hf(prompt, prompt_negativo, n, tamanho, hf_token):
+    IMPORTANTE:
+    - Endpoint correto: https://router.huggingface.co/hf-inference/models/<MODEL_ID>
+    - Corpo: {"inputs": "...", "parameters": {...}}
+    - Retorno: bytes de imagem (PNG/JPEG).
     """
-    Chama a API de Inference da Hugging Face (router.huggingface.co)
-    para gerar imagens com o modelo HF_MODEL_ID.
-    Retorna uma lista de bytes (cada item é o conteúdo da imagem).
-    """
+
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
+
+    # Monta a URL COM o modelo no path (era isso que estava dando 404)
+    api_url = f"{HF_API_BASE_URL}/{HF_MODEL_ID}"
+
     headers = {
-        "Authorization": f"Bearer {hf_token}",
-        "Accept": "image/png",
-        "Content-Type": "application/json",
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Accept": "image/png",  # pedimos imagem direta
     }
 
-    # Converte "1024x1024" -> width=1024, height=1024
+    # Parâmetros básicos (muitos modelos ignoram alguns campos,
+    # mas negativo, steps e tamanho costumam ser respeitados)
+    params = {
+        "negative_prompt": negative_prompt or "",
+        "num_inference_steps": 28,
+        "guidance_scale": 7.0,
+    }
+
+    # Tenta interpretar largura x altura
     try:
-        w_str, h_str = tamanho.lower().split("x")
-        width = int(w_str)
-        height = int(h_str)
+        w, h = size.lower().split("x")
+        params["width"] = int(w)
+        params["height"] = int(h)
     except Exception:
-        width, height = 1024, 1024
+        pass  # se der erro, deixa o modelo escolher o tamanho padrão
 
-    url = HF_API_URL
-    imagens_bytes = []
+    imagens = []
 
-    # Para evitar dor de cabeça, geramos 1 por vez no loop
     for i in range(n):
         payload = {
-            "model": HF_MODEL_ID,
             "inputs": prompt,
-            "parameters": {
-                "negative_prompt": prompt_negativo or "",
-                "width": width,
-                "height": height,
-                "guidance_scale": 7.0,
-                "num_inference_steps": 30,
-            }
+            "parameters": params,
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        resp = requests.post(api_url, headers=headers, json=payload, timeout=240)
 
         if resp.status_code != 200:
             st.error(f"Erro da API Hugging Face (status {resp.status_code}) na imagem {i+1}")
-            try:
-                st.code(resp.text, language="json")
-            except Exception:
-                st.write(resp.text)
-            raise Exception(f"Erro da API Hugging Face: {resp.status_code}")
+            # Mostra texto bruto pra debug (é aqui que você veria 404, 410, etc.)
+            st.code(resp.text)
+            raise RuntimeError(f"Falha HF: {resp.status_code}")
 
-        imagens_bytes.append(resp.content)
+        try:
+            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        except Exception as e:
+            st.error(f"Não consegui decodificar a imagem {i+1} da HF.")
+            st.code(str(e))
+            raise
 
-    return imagens_bytes
+        imagens.append(img)
+
+    return imagens
 
 
 # =========================
-# APP STREAMLIT
+# UI – FORMULÁRIO
 # =========================
 
-st.set_page_config(
-    page_title="Gerador de Imagens – LemonFox / Hugging Face",
-    page_icon="🖼️"
-)
+st.subheader("Configuração do Prompt")
 
-st.title("🖼️ Gerador de Imagens")
-st.caption("App privado para testes – protegido por senha simples.")
-
-# ---------- BLOQUEIO POR SENHA ----------
-senha = st.text_input("Senha de acesso", type="password")
-
-if senha != PASSWORD:
-    st.warning("Informe a senha correta para acessar o gerador.")
-    st.stop()
-
-st.success("Acesso liberado ✅")
-
-# ---------- SECRETS ----------
-lemonfox_api_key = st.secrets.get("LEMONFOX_API_KEY", "")
-hf_api_token = st.secrets.get("HF_API_TOKEN", "")
-
-# ---------- ESCOLHA DO PROVIDER ----------
-st.subheader("Provedor de geração")
-
-provider = st.radio(
-    "Escolha qual API usar:",
-    [
-        "LemonFox (SDXL API)",
-        "Hugging Face (SDXL / Stable Diffusion)",
-    ],
-)
-
-if provider.startswith("LemonFox"):
-    if not lemonfox_api_key:
-        st.error(
-            "⚠️ LEMONFOX_API_KEY não definida nos secrets.\n\n"
-            "Adicione no secrets.toml ou nos Secrets do Streamlit Cloud."
-        )
-elif provider.startswith("Hugging Face"):
-    if not hf_api_token:
-        st.error(
-            "⚠️ HF_API_TOKEN não definido nos secrets.\n\n"
-            "Crie um token na sua conta da Hugging Face e adicione nos secrets."
-        )
-
-# ---------- INTERFACE DE PROMPTS ----------
-st.subheader("Prompt de geração")
-
-prompt_positivo = st.text_area(
-    "Prompt positivo (o que você quer na imagem):",
-    height=140,
-    placeholder=(
-        "ex: Laura Massariol, stunning Brazilian redhead woman, late 20s, "
-        "long wavy fiery copper hair, green eyes, comic book style, "
-        "full body, curves, dramatic warm lighting, ultra detailed"
-    ),
-)
-
-prompt_negativo = st.text_area(
-    "Prompt negativo (o que você NÃO quer):",
-    height=100,
-    placeholder=(
-        "ex: low quality, blurry, pixelated, bad anatomy, extra limbs, "
-        "flat butt, flat chest, deformed face, extra fingers, text, watermark"
-    ),
+modelo = st.radio(
+    "Qual provedor usar?",
+    ["LemonFox (SDXL)", "Hugging Face (FLUX.1-dev)"],
+    index=0,
+    help="Se o LemonFox estiver com erro 500, teste o Hugging Face."
 )
 
 col1, col2 = st.columns(2)
+
 with col1:
-    n = st.slider("Quantidade de imagens", min_value=1, max_value=4, value=1)
-with col2:
-    tamanho = st.selectbox(
-        "Tamanho da imagem",
-        ["512x512", "768x768", "1024x1024"],
-        index=2,
+    prompt_positivo = st.text_area(
+        "Prompt positivo (Laura)",
+        value=PROMPT_LAURA_BIQUINI,
+        height=180,
     )
 
-gerar = st.button("🚀 Gerar imagens")
+with col2:
+    prompt_negativo = st.text_area(
+        "Prompt negativo",
+        value=NEGATIVE_LAURA_DEFAULT,
+        height=180,
+    )
 
-if gerar:
+col_a, col_b = st.columns(2)
+with col_a:
+    qtd = st.slider("Quantidade de imagens", 1, 4, 2)
+with col_b:
+    tamanho = st.selectbox(
+        "Tamanho",
+        ["1024x1024", "768x1024", "1024x768"],
+        index=0,
+    )
+
+if st.button("🚀 Gerar imagens da Laura"):
     if not prompt_positivo.strip():
-        st.warning("Digite pelo menos o prompt positivo para gerar as imagens.")
+        st.error("Digite um prompt positivo.")
         st.stop()
 
-    # Verifica se o provider escolhido tem credencial
-    if provider.startswith("LemonFox") and not lemonfox_api_key:
-        st.error("LEMONFOX_API_KEY não configurada. Não é possível usar LemonFox.")
-        st.stop()
-    if provider.startswith("Hugging Face") and not hf_api_token:
-        st.error("HF_API_TOKEN não configurado. Não é possível usar Hugging Face.")
-        st.stop()
-
-    with st.spinner(f"Gerando imagens com {provider}..."):
-        try:
-            if provider.startswith("LemonFox"):
-                # Retorna URLs
-                urls = gerar_imagens_lemonfox(
-                    prompt=prompt_positivo,
-                    prompt_negativo=prompt_negativo,
-                    n=n,
-                    tamanho=tamanho,
-                    api_key=lemonfox_api_key,
-                )
-
-                if not urls:
-                    st.warning("Nenhuma imagem foi retornada pela API LemonFox.")
-                    st.stop()
-
-                st.success(f"{len(urls)} imagem(ns) gerada(s) com sucesso pela LemonFox! 🎉")
-
-                for i, url in enumerate(urls, start=1):
-                    st.markdown(f"### Imagem {i}")
-                    st.image(url, caption=f"Imagem {i}", use_column_width=True)
-
-                    try:
-                        img_bytes = baixar_bytes_imagem(url)
-                        st.download_button(
-                            label=f"⬇️ Baixar imagem {i}",
-                            data=img_bytes,
-                            file_name=f"lemonfox_img_{i}.png",
-                            mime="image/png",
-                        )
-                    except Exception as e:
-                        st.error(f"Não foi possível preparar o download da imagem {i}: {e}")
-
+    try:
+        if modelo.startswith("LemonFox"):
+            st.info("Chamando API LemonFox (SDXL)...")
+            urls = gerar_imagens_lemonfox(prompt_positivo, prompt_negativo, n=qtd, size=tamanho)
+            if not urls:
+                st.warning("A LemonFox não retornou URLs de imagens.")
             else:
-                # Hugging Face – retorna bytes
-                imagens_bytes = gerar_imagens_hf(
-                    prompt_positivo,
-                    prompt_negativo,
-                    n,
-                    tamanho,
-                    hf_api_token,
-                )
+                for idx, url in enumerate(urls, start=1):
+                    st.markdown(f"### Imagem {idx}")
+                    try:
+                        img = baixar_imagem(url)
+                        st.image(img, use_column_width=True)
+                        exibir_download(img, f"laura_lemonfox_{idx}.png")
+                    except Exception as e:
+                        st.error(f"Falha ao baixar a imagem {idx} da LemonFox.")
+                        st.code(str(e))
 
-                if not imagens_bytes:
-                    st.warning("Nenhuma imagem foi retornada pela API Hugging Face.")
-                    st.stop()
+        else:
+            st.info(f"Chamando Hugging Face ({HF_MODEL_ID}) via HF Inference...")
+            imagens = gerar_imagens_hf(prompt_positivo, prompt_negativo, n=qtd, size=tamanho)
+            if not imagens:
+                st.warning("A Hugging Face não retornou imagens.")
+            else:
+                for idx, img in enumerate(imagens, start=1):
+                    st.markdown(f"### Imagem {idx}")
+                    st.image(img, use_column_width=True)
+                    exibir_download(img, f"laura_hf_{idx}.png")
 
-                st.success(f"{len(imagens_bytes)} imagem(ns) gerada(s) com sucesso pela Hugging Face! 🎉")
-
-                for i, img_bytes in enumerate(imagens_bytes, start=1):
-                    st.markdown(f"### Imagem {i}")
-                    # st.image aceita bytes diretamente
-                    st.image(img_bytes, caption=f"Imagem {i}", use_column_width=True)
-
-                    st.download_button(
-                        label=f"⬇️ Baixar imagem {i}",
-                        data=img_bytes,
-                        file_name=f"huggingface_img_{i}.png",
-                        mime="image/png",
-                    )
-
-        except Exception as e:
-            st.error(f"Falha ao gerar imagens: {e}")
-            st.stop()
+    except Exception as e:
+        st.error(f"Falha ao gerar imagens: {e}")
