@@ -1,5 +1,4 @@
 import io
-import base64
 import requests
 from PIL import Image
 import streamlit as st
@@ -48,6 +47,12 @@ QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
 # Hugging Face – Playground v2.5 via InferenceClient (fal-ai)
 PLAYGROUND_MODEL = "playgroundai/playground-v2.5-1024px-aesthetic"
 
+# Hugging Face – SDXL-Lightning via InferenceClient (fal-ai)
+LIGHTNING_MODEL = "ByteDance/SDXL-Lightning"
+
+# Hugging Face – HunyuanImage 3.0 via InferenceClient (fal-ai)
+HUNYUAN_MODEL = "tencent/HunyuanImage-3.0"
+
 # =========================
 # PROMPTS DA LAURA – HQ BIQUÍNI
 # =========================
@@ -57,14 +62,13 @@ PROMPT_LAURA_HQ_BIQUINI = (
     "long wavy fiery red hair, bright green eyes, playful confident smile, "
     "curvy hourglass body, full hips, thick thighs, natural medium-large breasts, "
     "wearing a stylish Brazilian bikini on the beach, sunny late afternoon, "
-    "standing in a dynamic sexy pose, one hand on her hip, other hand touching her hair, "
+    "standing in a dynamic pose, one hand on her hip, other hand touching her hair, "
     "highly detailed COMIC BOOK illustration, adult graphic novel style, "
     "bold clean ink lines, rich cel shading, soft halftone textures, "
     "warm saturated colors, dramatic backlighting outlining her silhouette, "
     "strong contrast between light and shadow, slight grain like printed comics, "
-    "camera angle slightly from below to emphasize presence and power, "
     "background with simplified beach and sky, depth of field like comics panel, "
-    "ultra detailed, sharp, high resolution, cover art of an adult comic book"
+    "ultra detailed, sharp, high resolution, cover art of a comic book"
 )
 
 NEGATIVE_HQ_DEFAULT = (
@@ -100,6 +104,11 @@ def download_button_from_pil(img: Image.Image, filename: str, label: str):
         mime="image/png",
     )
 
+
+def _client_fal() -> InferenceClient:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
+    return InferenceClient(provider="fal-ai", api_key=HF_TOKEN)
 
 # =========================
 # CHAMADAS ÀS APIS
@@ -199,20 +208,14 @@ def gerar_imagens_qwen(prompt: str, negative_prompt: str, n: int = 1):
     Gera imagens usando Qwen/Qwen-Image via InferenceClient (provider fal-ai).
     Retorna lista de PIL.Image.
     """
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
-
-    client = InferenceClient(
-        provider="fal-ai",
-        api_key=HF_TOKEN,
-    )
+    client = _client_fal()
 
     full_prompt = prompt
     if negative_prompt:
         full_prompt = f"{prompt}. Avoid: {negative_prompt}"
 
     imagens = []
-    for i in range(n):
+    for _ in range(n):
         img = client.text_to_image(
             prompt=full_prompt,
             model=QWEN_IMAGE_MODEL,
@@ -228,23 +231,63 @@ def gerar_imagens_playground(prompt: str, negative_prompt: str, n: int = 1):
     via InferenceClient (provider fal-ai).
     Retorna lista de PIL.Image.
     """
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
-
-    client = InferenceClient(
-        provider="fal-ai",
-        api_key=HF_TOKEN,
-    )
+    client = _client_fal()
 
     full_prompt = prompt
     if negative_prompt:
         full_prompt = f"{prompt}. Avoid: {negative_prompt}"
 
     imagens = []
-    for i in range(n):
+    for _ in range(n):
         img = client.text_to_image(
             prompt=full_prompt,
             model=PLAYGROUND_MODEL,
+        )
+        imagens.append(img)
+
+    return imagens
+
+
+def gerar_imagens_lightning(prompt: str, negative_prompt: str, n: int = 1):
+    """
+    Gera imagens usando ByteDance/SDXL-Lightning
+    via InferenceClient (provider fal-ai).
+    Retorna lista de PIL.Image.
+    """
+    client = _client_fal()
+
+    full_prompt = prompt
+    if negative_prompt:
+        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
+
+    imagens = []
+    for _ in range(n):
+        img = client.text_to_image(
+            prompt=full_prompt,
+            model=LIGHTNING_MODEL,
+        )
+        imagens.append(img)
+
+    return imagens
+
+
+def gerar_imagens_hunyuan(prompt: str, negative_prompt: str, n: int = 1):
+    """
+    Gera imagens usando tencent/HunyuanImage-3.0
+    via InferenceClient (provider fal-ai).
+    Retorna lista de PIL.Image.
+    """
+    client = _client_fal()
+
+    full_prompt = prompt
+    if negative_prompt:
+        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
+
+    imagens = []
+    for _ in range(n):
+        img = client.text_to_image(
+            prompt=full_prompt,
+            model=HUNYUAN_MODEL,
         )
         imagens.append(img)
 
@@ -264,6 +307,8 @@ provider = st.radio(
         "Hugging Face – FLUX.1-dev (Router)",
         "Hugging Face – Qwen-Image (fal-ai)",
         "Hugging Face – Playground v2.5 (fal-ai)",
+        "Hugging Face – SDXL-Lightning (fal-ai)",
+        "Hugging Face – HunyuanImage 3.0 (fal-ai)",
     ],
     index=1,
 )
@@ -289,7 +334,7 @@ with col_a:
     qtd = st.slider("Quantidade de imagens", 1, 4, 2)
 with col_b:
     tamanho = st.selectbox(
-        "Tamanho",
+        "Tamanho (usado por FLUX / LemonFox; os outros podem ignorar):",
         ["1024x1024", "768x1024", "1024x768"],
         index=0,
     )
@@ -342,7 +387,7 @@ if st.button("🚀 Gerar imagens da Laura"):
                 st.error("HF_TOKEN não configurado nos secrets.")
                 st.stop()
 
-            st.info(f"Chamando Hugging Face – Qwen/Qwen-Image via fal-ai ...")
+            st.info("Chamando Hugging Face – Qwen/Qwen-Image via fal-ai ...")
             imagens = gerar_imagens_qwen(prompt_positivo, prompt_negativo, n=qtd)
 
             if not imagens:
@@ -353,12 +398,12 @@ if st.button("🚀 Gerar imagens da Laura"):
                     st.image(img, use_column_width=True)
                     download_button_from_pil(img, f"laura_qwen_{idx}.png", f"⬇️ Baixar imagem {idx}")
 
-        else:  # Playground v2.5
+        elif "Playground" in provider:
             if not HF_TOKEN:
                 st.error("HF_TOKEN não configurado nos secrets.")
                 st.stop()
 
-            st.info(f"Chamando Hugging Face – Playground v2.5 via fal-ai ...")
+            st.info("Chamando Hugging Face – Playground v2.5 via fal-ai ...")
             imagens = gerar_imagens_playground(prompt_positivo, prompt_negativo, n=qtd)
 
             if not imagens:
@@ -368,6 +413,38 @@ if st.button("🚀 Gerar imagens da Laura"):
                     st.markdown(f"### Imagem {idx}")
                     st.image(img, use_column_width=True)
                     download_button_from_pil(img, f"laura_playground_{idx}.png", f"⬇️ Baixar imagem {idx}")
+
+        elif "SDXL-Lightning" in provider:
+            if not HF_TOKEN:
+                st.error("HF_TOKEN não configurado nos secrets.")
+                st.stop()
+
+            st.info("Chamando Hugging Face – SDXL-Lightning via fal-ai ...")
+            imagens = gerar_imagens_lightning(prompt_positivo, prompt_negativo, n=qtd)
+
+            if not imagens:
+                st.warning("SDXL-Lightning não retornou imagens.")
+            else:
+                for idx, img in enumerate(imagens, start=1):
+                    st.markdown(f"### Imagem {idx}")
+                    st.image(img, use_column_width=True)
+                    download_button_from_pil(img, f"laura_lightning_{idx}.png", f"⬇️ Baixar imagem {idx}")
+
+        else:  # HunyuanImage 3.0
+            if not HF_TOKEN:
+                st.error("HF_TOKEN não configurado nos secrets.")
+                st.stop()
+
+            st.info("Chamando Hugging Face – HunyuanImage 3.0 via fal-ai ...")
+            imagens = gerar_imagens_hunyuan(prompt_positivo, prompt_negativo, n=qtd)
+
+            if not imagens:
+                st.warning("HunyuanImage 3.0 não retornou imagens.")
+            else:
+                for idx, img in enumerate(imagens, start=1):
+                    st.markdown(f"### Imagem {idx}")
+                    st.image(img, use_column_width=True)
+                    download_button_from_pil(img, f"laura_hunyuan_{idx}.png", f"⬇️ Baixar imagem {idx}")
 
     except Exception as e:
         st.error(f"Falha ao gerar imagens: {e}")
