@@ -8,13 +8,14 @@ import streamlit as st
 API_URL = "https://api.lemonfox.ai/v1/images/generations"
 
 # Senha simples de acesso à página
-PASSWORD = "1234"  # 🔒 TROQUE para outra senha antes de publicar
+PASSWORD = "3110"  # 🔒 TROQUE para outra senha antes de publicar
 
 
 def gerar_imagens(prompt, prompt_negativo, n, tamanho, api_key):
     """
     Chama a API do LemonFox para gerar imagens.
     Retorna uma lista de URLs.
+    Em caso de erro, mostra o corpo da resposta para debug.
     """
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -32,9 +33,20 @@ def gerar_imagens(prompt, prompt_negativo, n, tamanho, api_key):
         payload["prompt_negativo"] = prompt_negativo
 
     resp = requests.post(API_URL, json=payload, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
 
+    # Tratamento de erro com debug
+    if resp.status_code != 200:
+        st.error(f"Erro da API LemonFox (status {resp.status_code})")
+        # Mostra o corpo da resposta (muitas vezes vem mensagem explicando o erro)
+        try:
+            st.code(resp.text, language="json")
+        except Exception:
+            st.write(resp.text)
+        # Levanta exceção para parar o fluxo de forma controlada
+        raise Exception(f"Erro da API LemonFox: {resp.status_code}")
+
+    # Se chegou aqui, status é 200
+    data = resp.json()
     urls = [item["url"] for item in data.get("data", [])]
     return urls
 
@@ -83,14 +95,21 @@ st.subheader("Prompt de geração")
 
 prompt_positivo = st.text_area(
     "Prompt positivo (o que você quer na imagem):",
-    height=120,
-    placeholder="ex: redhead woman, comic book style, full body, dramatic warm lighting, detailed body, curves, 4k",
+    height=140,
+    placeholder=(
+        "ex: Laura Massariol, stunning Brazilian redhead woman, late 20s, "
+        "long wavy fiery copper hair, green eyes, comic book style, "
+        "full body, curves, dramatic warm lighting, ultra detailed"
+    ),
 )
 
 prompt_negativo = st.text_area(
     "Prompt negativo (o que você NÃO quer):",
     height=100,
-    placeholder="ex: blurry, low quality, extra limbs, deformed, bad anatomy",
+    placeholder=(
+        "ex: low quality, blurry, pixelated, bad anatomy, extra limbs, "
+        "flat butt, flat chest, deformed face, extra fingers, text, watermark"
+    ),
 )
 
 col1, col2 = st.columns(2)
@@ -120,7 +139,8 @@ if gerar:
                 api_key=api_key,
             )
         except Exception as e:
-            st.error(f"Erro ao gerar imagens: {e}")
+            # A gerar_imagens já mostra detalhes do erro.
+            st.error(f"Falha ao gerar imagens: {e}")
             st.stop()
 
     if not urls:
