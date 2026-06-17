@@ -117,26 +117,8 @@ def gerar_imagens_lemonfox(
     size: str = "1024x1024",
     response_format: str = "url",
 ):
-    """
-    Gera imagens via LemonFox SDXL.
-
-    Parâmetros:
-    - prompt: prompt positivo.
-    - negative_prompt: prompt negativo.
-    - n: quantidade de imagens.
-    - size: tamanho da imagem. Ex: 1024x1024.
-    - response_format: "url" ou "b64_json".
-
-    Retorna:
-    - lista de URLs, se response_format="url"
-    - lista de PIL.Image, se response_format="b64_json"
-    """
-
     if not LEMONFOX_API_KEY:
         raise RuntimeError("LEMONFOX_API_KEY não encontrado em st.secrets.")
-
-    if response_format not in ["url", "b64_json"]:
-        raise ValueError("response_format deve ser 'url' ou 'b64_json'.")
 
     headers = {
         "Authorization": f"Bearer {LEMONFOX_API_KEY}",
@@ -172,26 +154,23 @@ def gerar_imagens_lemonfox(
         return []
 
     if response_format == "url":
-        urls = []
+        return [item["url"] for item in itens if "url" in item]
 
+    elif response_format == "b64_json":
+        imagens = []
         for item in itens:
-            url = item.get("url")
-            if url:
-                urls.append(url)
+            b64_json = item.get("b64_json")
+            if not b64_json:
+                continue
 
-        return urls
+            img_bytes = base64.b64decode(b64_json)
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            imagens.append(img)
 
-    imagens = []
+        return imagens
 
-    for item in itens:
-        b64_json = item.get("b64_json")
-        if not b64_json:
-            continue
-
-        img = imagem_from_b64_json(b64_json)
-        imagens.append(img)
-
-    return imagens
+    else:
+        raise ValueError("response_format deve ser 'url' ou 'b64_json'.")
 
 
 # =========================
