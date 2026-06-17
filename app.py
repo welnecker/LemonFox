@@ -1,8 +1,8 @@
 import io
+import base64
 import requests
 from PIL import Image
 import streamlit as st
-from huggingface_hub import InferenceClient
 
 # =========================
 # CONFIGURAÇÕES GERAIS
@@ -20,38 +20,22 @@ st.title("🖼️ Laura Image Studio")
 APP_PASSWORD = st.secrets.get("APP_PASSWORD", "1234")
 
 senha = st.text_input("Senha de acesso", type="password")
+
 if senha != APP_PASSWORD:
     st.warning("Digite a senha correta para acessar o gerador de imagens.")
     st.stop()
 
 st.success("Acesso liberado! ✅")
 
-# ---- Chaves das APIs nos secrets ----
+# ---- Chave LemonFox nos secrets ----
 LEMONFOX_API_KEY = st.secrets.get("LEMONFOX_API_KEY", "")
-HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
 # =========================
-# ENDPOINTS / MODELOS
+# ENDPOINT / MODELO
 # =========================
 
-# LemonFox (SDXL)
+# LemonFox Stable Diffusion XL
 LEMONFOX_URL = "https://api.lemonfox.ai/v1/images/generations"
-
-# Hugging Face – FLUX.1-dev via Router
-HF_MODEL_FLUX = "black-forest-labs/FLUX.1-dev"
-HF_API_BASE_URL = "https://router.huggingface.co/hf-inference/models"  # /<MODEL_ID>
-
-# Hugging Face – Qwen Image via InferenceClient (fal-ai)
-QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
-
-# Hugging Face – Playground v2.5 via InferenceClient (fal-ai)
-PLAYGROUND_MODEL = "playgroundai/playground-v2.5-1024px-aesthetic"
-
-# Hugging Face – SDXL-Lightning via InferenceClient (fal-ai)
-LIGHTNING_MODEL = "ByteDance/SDXL-Lightning"
-
-# Hugging Face – HunyuanImage 3.0 via InferenceClient (fal-ai)
-HUNYUAN_MODEL = "tencent/HunyuanImage-3.0"
 
 # =========================
 # PROMPTS DA LAURA – HQ BIQUÍNI
@@ -63,18 +47,19 @@ PROMPT_LAURA_HQ_BIQUINI = (
     "curvy hourglass body, full hips, thick thighs, natural medium-large breasts, "
     "wearing a stylish Brazilian bikini on the beach, sunny late afternoon, "
     "standing in a dynamic pose, one hand on her hip, other hand touching her hair, "
-    "highly detailed COMIC BOOK illustration, adult graphic novel style, "
+    "highly detailed Western comic book illustration, adult graphic novel style, "
+    "not anime, not manga, not oriental, "
     "bold clean ink lines, rich cel shading, soft halftone textures, "
     "warm saturated colors, dramatic backlighting outlining her silhouette, "
     "strong contrast between light and shadow, slight grain like printed comics, "
     "background with simplified beach and sky, depth of field like comics panel, "
-    "ultra detailed, sharp, high resolution, cover art of a comic book"
+    "ultra detailed, sharp, high resolution, comic book cover art"
 )
 
 NEGATIVE_HQ_DEFAULT = (
     "blurry, low quality, pixelated, noisy, "
-    "photorealistic, 3d render, cgi, video game graphics, "
-    "anime style, manga style, chibi, cartoon for kids, "
+    "photorealistic, realistic photo, 3d render, cgi, video game graphics, "
+    "anime style, manga style, chibi, cartoon for kids, oriental style, "
     "bad anatomy, deformed body, extra limbs, fused limbs, "
     "flat chest, flat butt, unnatural skinny body, "
     "warped face, asymmetrical eyes, melted eyes, "
@@ -89,14 +74,30 @@ NEGATIVE_HQ_DEFAULT = (
 # =========================
 
 def baixar_imagem_url(url: str) -> Image.Image:
+    """
+    Baixa uma imagem a partir de uma URL temporária retornada pela LemonFox.
+    Retorna PIL.Image em RGB.
+    """
     resp = requests.get(url, timeout=60)
     resp.raise_for_status()
     return Image.open(io.BytesIO(resp.content)).convert("RGB")
 
 
+def imagem_from_b64_json(b64_json: str) -> Image.Image:
+    """
+    Converte uma imagem em base64 retornada pela LemonFox para PIL.Image.
+    """
+    img_bytes = base64.b64decode(b64_json)
+    return Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+
 def download_button_from_pil(img: Image.Image, filename: str, label: str):
+    """
+    Cria botão de download para uma imagem PIL.
+    """
     buf = io.BytesIO()
     img.save(buf, format="PNG")
+
     st.download_button(
         label=label,
         data=buf.getvalue(),
@@ -105,22 +106,37 @@ def download_button_from_pil(img: Image.Image, filename: str, label: str):
     )
 
 
-def _client_fal() -> InferenceClient:
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
-    return InferenceClient(provider="fal-ai", api_key=HF_TOKEN)
-
 # =========================
-# CHAMADAS ÀS APIS
+# CHAMADA À API LEMONFOX
 # =========================
 
-def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
+def gerar_imagens_lemonfox(
+    prompt: str,
+    negative_prompt: str = "",
+    n: int = 1,
+    size: str = "1024x1024",
+    response_format: str = "url",
+):
     """
     Gera imagens via LemonFox SDXL.
-    Retorna uma lista de URLs.
+
+    Parâmetros:
+    - prompt: prompt positivo.
+    - negative_prompt: prompt negativo.
+    - n: quantidade de imagens.
+    - size: tamanho da imagem. Ex: 1024x1024.
+    - response_format: "url" ou "b64_json".
+
+    Retorna:
+    - lista de URLs, se response_format="url"
+    - lista de PIL.Image, se response_format="b64_json"
     """
+
     if not LEMONFOX_API_KEY:
         raise RuntimeError("LEMONFOX_API_KEY não encontrado em st.secrets.")
+
+    if response_format not in ["url", "b64_json"]:
+        raise ValueError("response_format deve ser 'url' ou 'b64_json'.")
 
     headers = {
         "Authorization": f"Bearer {LEMONFOX_API_KEY}",
@@ -128,167 +144,51 @@ def gerar_imagens_lemonfox(prompt: str, negative_prompt: str, n: int = 1, size: 
     }
 
     payload = {
-        "prompt": prompt,
-        "n": n,
+        "prompt": prompt.strip(),
+        "n": int(n),
         "tamanho": size,
-        "formato_de_resposta": "url",
+        "formato_de_resposta": response_format,
     }
 
-    if negative_prompt:
-        payload["prompt_negativo"] = negative_prompt
+    if negative_prompt and negative_prompt.strip():
+        payload["prompt_negativo"] = negative_prompt.strip()
 
-    resp = requests.post(LEMONFOX_URL, headers=headers, json=payload, timeout=120)
+    resp = requests.post(
+        LEMONFOX_URL,
+        headers=headers,
+        json=payload,
+        timeout=180,
+    )
 
     if resp.status_code != 200:
-        st.error(f"Erro da API LemonFox (status {resp.status_code})")
+        st.error(f"Erro da API LemonFox — status {resp.status_code}")
         st.code(resp.text)
         raise RuntimeError(f"Falha LemonFox: {resp.status_code}")
 
     data = resp.json()
-    urls = [item["url"] for item in data.get("data", [])]
-    return urls
+    itens = data.get("data", [])
 
+    if not itens:
+        return []
 
-def gerar_imagens_flux_router(prompt: str, negative_prompt: str, n: int = 1, size: str = "1024x1024"):
-    """
-    Gera imagens via Hugging Face Router com o modelo FLUX.1-dev.
-    Retorna lista de PIL.Image.
-    """
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
+    if response_format == "url":
+        urls = []
 
-    api_url = f"{HF_API_BASE_URL}/{HF_MODEL_FLUX}"
+        for item in itens:
+            url = item.get("url")
+            if url:
+                urls.append(url)
 
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Accept": "image/png",
-    }
-
-    params = {
-        "negative_prompt": negative_prompt or "",
-        "num_inference_steps": 26,
-        "guidance_scale": 7.0,
-    }
-
-    try:
-        w, h = size.lower().split("x")
-        params["width"] = int(w)
-        params["height"] = int(h)
-    except Exception:
-        pass
+        return urls
 
     imagens = []
 
-    for i in range(n):
-        payload = {
-            "inputs": prompt,
-            "parameters": params,
-        }
+    for item in itens:
+        b64_json = item.get("b64_json")
+        if not b64_json:
+            continue
 
-        resp = requests.post(api_url, headers=headers, json=payload, timeout=240)
-        if resp.status_code != 200:
-            st.error(f"Erro da API Hugging Face (FLUX.1-dev) – status {resp.status_code} na imagem {i+1}")
-            st.code(resp.text)
-            raise RuntimeError(f"Falha HF FLUX: {resp.status_code}")
-
-        try:
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        except Exception as e:
-            st.error(f"Não consegui decodificar a imagem {i+1} do FLUX.1-dev.")
-            st.code(str(e))
-            raise
-
-        imagens.append(img)
-
-    return imagens
-
-
-def gerar_imagens_qwen(prompt: str, negative_prompt: str, n: int = 1):
-    """
-    Gera imagens usando Qwen/Qwen-Image via InferenceClient (provider fal-ai).
-    Retorna lista de PIL.Image.
-    """
-    client = _client_fal()
-
-    full_prompt = prompt
-    if negative_prompt:
-        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
-
-    imagens = []
-    for _ in range(n):
-        img = client.text_to_image(
-            prompt=full_prompt,
-            model=QWEN_IMAGE_MODEL,
-        )
-        imagens.append(img)
-
-    return imagens
-
-
-def gerar_imagens_playground(prompt: str, negative_prompt: str, n: int = 1):
-    """
-    Gera imagens usando playgroundai/playground-v2.5-1024px-aesthetic
-    via InferenceClient (provider fal-ai).
-    Retorna lista de PIL.Image.
-    """
-    client = _client_fal()
-
-    full_prompt = prompt
-    if negative_prompt:
-        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
-
-    imagens = []
-    for _ in range(n):
-        img = client.text_to_image(
-            prompt=full_prompt,
-            model=PLAYGROUND_MODEL,
-        )
-        imagens.append(img)
-
-    return imagens
-
-
-def gerar_imagens_lightning(prompt: str, negative_prompt: str, n: int = 1):
-    """
-    Gera imagens usando ByteDance/SDXL-Lightning
-    via InferenceClient (provider fal-ai).
-    Retorna lista de PIL.Image.
-    """
-    client = _client_fal()
-
-    full_prompt = prompt
-    if negative_prompt:
-        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
-
-    imagens = []
-    for _ in range(n):
-        img = client.text_to_image(
-            prompt=full_prompt,
-            model=LIGHTNING_MODEL,
-        )
-        imagens.append(img)
-
-    return imagens
-
-
-def gerar_imagens_hunyuan(prompt: str, negative_prompt: str, n: int = 1):
-    """
-    Gera imagens usando tencent/HunyuanImage-3.0
-    via InferenceClient (provider fal-ai).
-    Retorna lista de PIL.Image.
-    """
-    client = _client_fal()
-
-    full_prompt = prompt
-    if negative_prompt:
-        full_prompt = f"{prompt}. Avoid: {negative_prompt}"
-
-    imagens = []
-    for _ in range(n):
-        img = client.text_to_image(
-            prompt=full_prompt,
-            model=HUNYUAN_MODEL,
-        )
+        img = imagem_from_b64_json(b64_json)
         imagens.append(img)
 
     return imagens
@@ -300,151 +200,134 @@ def gerar_imagens_hunyuan(prompt: str, negative_prompt: str, n: int = 1):
 
 st.subheader("Configuração do Prompt – Laura HQ de biquíni")
 
-provider = st.radio(
-    "Escolha o provedor:",
-    [
-        "LemonFox (SDXL)",
-        "Hugging Face – FLUX.1-dev (Router)",
-        "Hugging Face – Qwen-Image (fal-ai)",
-        "Hugging Face – Playground v2.5 (fal-ai)",
-        "Hugging Face – SDXL-Lightning (fal-ai)",
-        "Hugging Face – HunyuanImage 3.0 (fal-ai)",
-    ],
-    index=1,
-)
-
 col1, col2 = st.columns(2)
 
 with col1:
     prompt_positivo = st.text_area(
-        "Prompt positivo (Laura em HQ):",
+        "Prompt positivo:",
         value=PROMPT_LAURA_HQ_BIQUINI,
-        height=200,
+        height=230,
     )
 
 with col2:
     prompt_negativo = st.text_area(
-        "Prompt negativo (o que evitar):",
+        "Prompt negativo:",
         value=NEGATIVE_HQ_DEFAULT,
-        height=200,
+        height=230,
     )
 
-col_a, col_b = st.columns(2)
+col_a, col_b, col_c = st.columns(3)
+
 with col_a:
-    qtd = st.slider("Quantidade de imagens", 1, 4, 2)
+    qtd = st.slider(
+        "Quantidade de imagens",
+        min_value=1,
+        max_value=4,
+        value=2,
+    )
+
 with col_b:
     tamanho = st.selectbox(
-        "Tamanho (usado por FLUX / LemonFox; os outros podem ignorar):",
-        ["1024x1024", "768x1024", "1024x768"],
+        "Tamanho",
+        [
+            "1024x1024",
+            "768x1024",
+            "1024x768",
+        ],
         index=0,
+        help="Tamanho enviado para a API LemonFox SDXL.",
     )
+
+with col_c:
+    formato_resposta = st.selectbox(
+        "Formato da resposta",
+        [
+            "url",
+            "b64_json",
+        ],
+        index=0,
+        help=(
+            "url: retorna links temporários das imagens. "
+            "b64_json: retorna a imagem diretamente em base64."
+        ),
+    )
+
+st.divider()
+
+# =========================
+# BOTÃO DE GERAÇÃO
+# =========================
 
 if st.button("🚀 Gerar imagens da Laura"):
     if not prompt_positivo.strip():
         st.error("Digite um prompt positivo.")
         st.stop()
 
+    if not LEMONFOX_API_KEY:
+        st.error("LEMONFOX_API_KEY não configurada nos secrets.")
+        st.stop()
+
     try:
-        if provider.startswith("LemonFox"):
-            if not LEMONFOX_API_KEY:
-                st.error("LEMONFOX_API_KEY não configurada nos secrets.")
-                st.stop()
+        st.info("Chamando API LemonFox SDXL...")
 
-            st.info("Chamando API LemonFox (SDXL)...")
-            urls = gerar_imagens_lemonfox(prompt_positivo, prompt_negativo, n=qtd, size=tamanho)
+        resultado = gerar_imagens_lemonfox(
+            prompt=prompt_positivo,
+            negative_prompt=prompt_negativo,
+            n=qtd,
+            size=tamanho,
+            response_format=formato_resposta,
+        )
 
-            if not urls:
-                st.warning("A LemonFox não retornou URLs de imagens.")
-            else:
-                for idx, url in enumerate(urls, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    try:
-                        img = baixar_imagem_url(url)
-                        st.image(img, use_column_width=True)
-                        download_button_from_pil(img, f"laura_lemonfox_{idx}.png", f"⬇️ Baixar imagem {idx}")
-                    except Exception as e:
-                        st.error(f"Falha ao baixar a imagem {idx} da LemonFox.")
-                        st.code(str(e))
+        if not resultado:
+            st.warning("A LemonFox não retornou imagens.")
+            st.stop()
 
-        elif "FLUX.1-dev" in provider:
-            if not HF_TOKEN:
-                st.error("HF_TOKEN não configurado nos secrets.")
-                st.stop()
+        st.success("Imagem(ns) gerada(s) com sucesso! ✅")
 
-            st.info(f"Chamando Hugging Face Router – {HF_MODEL_FLUX} ...")
-            imagens = gerar_imagens_flux_router(prompt_positivo, prompt_negativo, n=qtd, size=tamanho)
+        if formato_resposta == "url":
+            for idx, url in enumerate(resultado, start=1):
+                st.markdown(f"### Imagem {idx}")
 
-            if not imagens:
-                st.warning("A Hugging Face não retornou imagens (FLUX.1-dev).")
-            else:
-                for idx, img in enumerate(imagens, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    st.image(img, use_column_width=True)
-                    download_button_from_pil(img, f"laura_flux_{idx}.png", f"⬇️ Baixar imagem {idx}")
+                try:
+                    img = baixar_imagem_url(url)
 
-        elif "Qwen-Image" in provider:
-            if not HF_TOKEN:
-                st.error("HF_TOKEN não configurado nos secrets.")
-                st.stop()
+                    st.image(
+                        img,
+                        use_column_width=True,
+                    )
 
-            st.info("Chamando Hugging Face – Qwen/Qwen-Image via fal-ai ...")
-            imagens = gerar_imagens_qwen(prompt_positivo, prompt_negativo, n=qtd)
+                    st.caption(
+                        "URL temporária da LemonFox. "
+                        "Normalmente fica disponível por tempo limitado."
+                    )
 
-            if not imagens:
-                st.warning("Qwen-Image não retornou imagens.")
-            else:
-                for idx, img in enumerate(imagens, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    st.image(img, use_column_width=True)
-                    download_button_from_pil(img, f"laura_qwen_{idx}.png", f"⬇️ Baixar imagem {idx}")
+                    with st.expander("Ver URL da imagem"):
+                        st.code(url)
 
-        elif "Playground" in provider:
-            if not HF_TOKEN:
-                st.error("HF_TOKEN não configurado nos secrets.")
-                st.stop()
+                    download_button_from_pil(
+                        img,
+                        f"laura_lemonfox_{idx}.png",
+                        f"⬇️ Baixar imagem {idx}",
+                    )
 
-            st.info("Chamando Hugging Face – Playground v2.5 via fal-ai ...")
-            imagens = gerar_imagens_playground(prompt_positivo, prompt_negativo, n=qtd)
+                except Exception as e:
+                    st.error(f"Falha ao baixar a imagem {idx}.")
+                    st.code(str(e))
 
-            if not imagens:
-                st.warning("Playground v2.5 não retornou imagens.")
-            else:
-                for idx, img in enumerate(imagens, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    st.image(img, use_column_width=True)
-                    download_button_from_pil(img, f"laura_playground_{idx}.png", f"⬇️ Baixar imagem {idx}")
+        else:
+            for idx, img in enumerate(resultado, start=1):
+                st.markdown(f"### Imagem {idx}")
 
-        elif "SDXL-Lightning" in provider:
-            if not HF_TOKEN:
-                st.error("HF_TOKEN não configurado nos secrets.")
-                st.stop()
+                st.image(
+                    img,
+                    use_column_width=True,
+                )
 
-            st.info("Chamando Hugging Face – SDXL-Lightning via fal-ai ...")
-            imagens = gerar_imagens_lightning(prompt_positivo, prompt_negativo, n=qtd)
-
-            if not imagens:
-                st.warning("SDXL-Lightning não retornou imagens.")
-            else:
-                for idx, img in enumerate(imagens, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    st.image(img, use_column_width=True)
-                    download_button_from_pil(img, f"laura_lightning_{idx}.png", f"⬇️ Baixar imagem {idx}")
-
-        else:  # HunyuanImage 3.0
-            if not HF_TOKEN:
-                st.error("HF_TOKEN não configurado nos secrets.")
-                st.stop()
-
-            st.info("Chamando Hugging Face – HunyuanImage 3.0 via fal-ai ...")
-            imagens = gerar_imagens_hunyuan(prompt_positivo, prompt_negativo, n=qtd)
-
-            if not imagens:
-                st.warning("HunyuanImage 3.0 não retornou imagens.")
-            else:
-                for idx, img in enumerate(imagens, start=1):
-                    st.markdown(f"### Imagem {idx}")
-                    st.image(img, use_column_width=True)
-                    download_button_from_pil(img, f"laura_hunyuan_{idx}.png", f"⬇️ Baixar imagem {idx}")
+                download_button_from_pil(
+                    img,
+                    f"laura_lemonfox_{idx}.png",
+                    f"⬇️ Baixar imagem {idx}",
+                )
 
     except Exception as e:
         st.error(f"Falha ao gerar imagens: {e}")
