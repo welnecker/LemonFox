@@ -40,7 +40,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # MODELOS
 # =========================
 
-MODELO_INICIAL = "google/gemini-2.5-flash-image-preview"
+MODELO_INICIAL = "x-ai/grok-imagine-image-quality"
 
 MODELOS_IMAGEM = [
     "google/gemini-2.5-flash-image-preview",
