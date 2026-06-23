@@ -1,4 +1,5 @@
 import io
+import re
 import base64
 import requests
 from PIL import Image
@@ -9,12 +10,13 @@ import streamlit as st
 # =========================
 
 st.set_page_config(
-    page_title="Laura Image Studio",
+    page_title="Comic Book Image Studio",
     page_icon="🖼️",
     layout="centered"
 )
 
-st.title("🖼️ Laura Image Studio")
+st.title("🖼️ Comic Book Image Studio")
+st.caption("Transforme uma imagem em estilo comic book usando OpenRouter")
 
 # ---- Senha simples de acesso ----
 APP_PASSWORD = st.secrets.get("APP_PASSWORD", "1234")
@@ -27,73 +29,134 @@ if senha != APP_PASSWORD:
 
 st.success("Acesso liberado! ✅")
 
-# ---- Chave LemonFox nos secrets ----
-LEMONFOX_API_KEY = st.secrets.get("LEMONFOX_API_KEY", "")
+# ---- Chave OpenRouter nos secrets ----
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
+APP_REFERER = st.secrets.get("APP_REFERER", "https://streamlit.app")
+APP_TITLE = st.secrets.get("APP_TITLE", "Comic Book Image Studio")
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # =========================
-# ENDPOINT / MODELO
+# MODELOS
 # =========================
 
-# LemonFox Stable Diffusion XL
-LEMONFOX_URL = "https://api.lemonfox.ai/v1/images/generations"
+MODELO_INICIAL = "google/gemini-2.5-flash-image-preview"
+
+MODELOS_IMAGEM = [
+    "google/gemini-2.5-flash-image-preview",
+    "openai/gpt-5.4-image-2",
+    "black-forest-labs/flux.2-pro",
+    "black-forest-labs/flux.2-flex",
+    "qwen/qwen3.7-plus",  # deixado aqui, mas pode não gerar imagem de saída
+]
 
 # =========================
-# PROMPTS DA LAURA – HQ BIQUÍNI
+# PROMPTS PADRÃO
 # =========================
 
-PROMPT_LAURA_HQ_BIQUINI = (
-    "Laura Massariol, beautiful Brazilian redhead woman in her late 20s, "
-    "long wavy fiery red hair, bright green eyes, playful confident smile, "
-    "curvy hourglass body, full hips, thick thighs, natural medium-large breasts, "
-    "wearing a stylish Brazilian bikini on the beach, sunny late afternoon, "
-    "standing in a dynamic pose, one hand on her hip, other hand touching her hair, "
-    "highly detailed Western comic book illustration, adult graphic novel style, "
-    "not anime, not manga, not oriental, "
-    "bold clean ink lines, rich cel shading, soft halftone textures, "
-    "warm saturated colors, dramatic backlighting outlining her silhouette, "
-    "strong contrast between light and shadow, slight grain like printed comics, "
-    "background with simplified beach and sky, depth of field like comics panel, "
-    "ultra detailed, sharp, high resolution, comic book cover art"
+PROMPT_COMIC_PADRAO = (
+    "Transform the uploaded image into a Western comic book illustration. "
+    "Preserve the person's identity, pose, body proportions, composition, and main scene elements. "
+    "Convert the image into a detailed comic book style with bold clean ink lines, "
+    "rich cel shading, soft halftone texture, expressive contours, strong highlights and shadows, "
+    "vibrant but balanced colors, and a polished graphic novel appearance. "
+    "Do not make it photorealistic. "
+    "The final result should clearly look like a drawn comic book illustration, not a painted photo."
 )
 
-NEGATIVE_HQ_DEFAULT = (
-    "blurry, low quality, pixelated, noisy, "
-    "photorealistic, realistic photo, 3d render, cgi, video game graphics, "
-    "anime style, manga style, chibi, cartoon for kids, oriental style, "
-    "bad anatomy, deformed body, extra limbs, fused limbs, "
-    "flat chest, flat butt, unnatural skinny body, "
-    "warped face, asymmetrical eyes, melted eyes, "
-    "mutated hands, extra fingers, missing fingers, "
-    "distorted proportions, extreme fisheye, "
-    "text, watermark, logo, caption, speech bubble, "
-    "overexposed, oversaturated neon colors"
+NEGATIVE_COMIC_PADRAO = (
+    "photorealistic, realistic photo, oil painting, watercolor, blurry, low quality, pixelated, noisy, "
+    "anime, manga, cartoon for kids, 3d render, cgi, deformed anatomy, extra limbs, extra fingers, "
+    "mutated hands, warped face, asymmetrical eyes, distorted proportions, text, watermark, logo, caption"
 )
 
 # =========================
 # FUNÇÕES AUXILIARES
 # =========================
 
-def baixar_imagem_url(url: str) -> Image.Image:
+def pil_to_data_url(img: Image.Image, format_: str = "PNG") -> str:
     """
-    Baixa uma imagem a partir de uma URL temporária retornada pela LemonFox.
-    Retorna PIL.Image em RGB.
+    Converte uma PIL Image em data URL base64.
     """
-    resp = requests.get(url, timeout=60)
-    resp.raise_for_status()
-    return Image.open(io.BytesIO(resp.content)).convert("RGB")
+    buffer = io.BytesIO()
+    img.save(buffer, format=format_)
+    mime = "image/png" if format_.upper() == "PNG" else "image/jpeg"
+    b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
 
 
-def imagem_from_b64_json(b64_json: str) -> Image.Image:
+def data_url_to_pil(data_url: str) -> Image.Image:
     """
-    Converte uma imagem em base64 retornada pela LemonFox para PIL.Image.
+    Converte data URL base64 para PIL Image.
     """
-    img_bytes = base64.b64decode(b64_json)
+    if "," not in data_url:
+        raise ValueError("Data URL inválida.")
+
+    _, b64_data = data_url.split(",", 1)
+    img_bytes = base64.b64decode(b64_data)
     return Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+
+def extract_images_from_openrouter(data: dict) -> list[Image.Image]:
+    """
+    Extrai imagens da resposta do OpenRouter.
+    """
+    imagens = []
+
+    choices = data.get("choices", [])
+    if not choices:
+        return imagens
+
+    message = choices[0].get("message", {})
+    content = message.get("content")
+
+    # content como lista multimodal
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+
+            tipo = item.get("type")
+
+            if tipo == "image_url":
+                image_url = item.get("image_url", {})
+                url = image_url.get("url", "") if isinstance(image_url, dict) else ""
+                if isinstance(url, str) and url.startswith("data:image/"):
+                    imagens.append(data_url_to_pil(url))
+
+            elif tipo in ("image", "output_image"):
+                url = item.get("url") or item.get("image_url") or ""
+                if isinstance(url, dict):
+                    url = url.get("url", "")
+                if isinstance(url, str) and url.startswith("data:image/"):
+                    imagens.append(data_url_to_pil(url))
+
+    # content como string com data URL embutida
+    elif isinstance(content, str):
+        encontrados = re.findall(
+            r"data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+",
+            content
+        )
+        for data_url in encontrados:
+            imagens.append(data_url_to_pil(data_url))
+
+    # fallback adicional
+    imagens_msg = message.get("images", [])
+    if isinstance(imagens_msg, list):
+        for item in imagens_msg:
+            if not isinstance(item, dict):
+                continue
+            image_url = item.get("image_url", {})
+            url = image_url.get("url", "") if isinstance(image_url, dict) else ""
+            if isinstance(url, str) and url.startswith("data:image/"):
+                imagens.append(data_url_to_pil(url))
+
+    return imagens
 
 
 def download_button_from_pil(img: Image.Image, filename: str, label: str):
     """
-    Cria botão de download para uma imagem PIL.
+    Cria botão de download para imagem PIL.
     """
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -106,207 +169,245 @@ def download_button_from_pil(img: Image.Image, filename: str, label: str):
     )
 
 
+def montar_prompt_final(prompt: str, negative_prompt: str, preservar_fundo: bool) -> str:
+    """
+    Monta o prompt final.
+    """
+    partes = [prompt.strip()]
+
+    if preservar_fundo:
+        partes.append(
+            "Preserve the original background and scene layout as much as possible."
+        )
+    else:
+        partes.append(
+            "You may simplify the background while preserving the main subject and scene readability."
+        )
+
+    if negative_prompt.strip():
+        partes.append("Negative prompt / avoid:")
+        partes.append(negative_prompt.strip())
+
+    return "\n\n".join(partes)
+
+
 # =========================
-# CHAMADA À API LEMONFOX
+# CHAMADA À API OPENROUTER
 # =========================
 
-def gerar_imagens_lemonfox(
+def gerar_imagem_de_outra_openrouter(
+    imagem_pil: Image.Image,
     prompt: str,
-    negative_prompt: str = "",
-    n: int = 1,
+    negative_prompt: str,
+    model: str,
     size: str = "1024x1024",
-    response_format: str = "url",
+    quality: str = "auto",
+    preservar_fundo: bool = True,
 ):
-    if not LEMONFOX_API_KEY:
-        raise RuntimeError("LEMONFOX_API_KEY não encontrado em st.secrets.")
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY não encontrado em st.secrets.")
 
     headers = {
-        "Authorization": f"Bearer {LEMONFOX_API_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
+        "HTTP-Referer": APP_REFERER,
+        "X-Title": APP_TITLE,
     }
+
+    imagem_data_url = pil_to_data_url(imagem_pil, format_="PNG")
+    prompt_final = montar_prompt_final(prompt, negative_prompt, preservar_fundo)
 
     payload = {
-        "prompt": prompt.strip(),
-        "n": int(n),
-        "tamanho": size,
-        "formato_de_resposta": response_format,
+        "model": model,
+        "modalities": ["image", "text"],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt_final
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": imagem_data_url
+                        }
+                    }
+                ]
+            }
+        ],
+        "image_config": {
+            "size": size,
+            "quality": quality
+        }
     }
 
-    if negative_prompt and negative_prompt.strip():
-        payload["prompt_negativo"] = negative_prompt.strip()
-
     resp = requests.post(
-        LEMONFOX_URL,
+        OPENROUTER_URL,
         headers=headers,
         json=payload,
-        timeout=180,
+        timeout=300,
     )
 
     if resp.status_code != 200:
-        st.error(f"Erro da API LemonFox — status {resp.status_code}")
+        st.error(f"Erro da API OpenRouter — status {resp.status_code}")
         st.code(resp.text)
-        raise RuntimeError(f"Falha LemonFox: {resp.status_code}")
+        raise RuntimeError(f"Falha OpenRouter: {resp.status_code}")
 
     data = resp.json()
-    itens = data.get("data", [])
+    imagens = extract_images_from_openrouter(data)
 
-    if not itens:
-        return []
+    texto_resposta = ""
+    try:
+        texto_resposta = data["choices"][0]["message"].get("content", "")
+    except Exception:
+        pass
 
-    if response_format == "url":
-        return [item["url"] for item in itens if "url" in item]
-
-    elif response_format == "b64_json":
-        imagens = []
-        for item in itens:
-            b64_json = item.get("b64_json")
-            if not b64_json:
-                continue
-
-            img_bytes = base64.b64decode(b64_json)
-            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            imagens.append(img)
-
-        return imagens
-
-    else:
-        raise ValueError("response_format deve ser 'url' ou 'b64_json'.")
+    return imagens, texto_resposta, data
 
 
 # =========================
-# UI – FORMULÁRIO
+# UI
 # =========================
 
-st.subheader("Configuração do Prompt – Laura HQ de biquíni")
+st.subheader("Enviar imagem de referência")
+
+arquivo = st.file_uploader(
+    "Escolha uma imagem",
+    type=["png", "jpg", "jpeg", "webp"]
+)
+
+if arquivo:
+    imagem_original = Image.open(arquivo).convert("RGB")
+    st.image(imagem_original, caption="Imagem original", use_container_width=True)
+else:
+    imagem_original = None
+
+st.subheader("Configuração")
+
+modelo = st.selectbox(
+    "Modelo OpenRouter",
+    MODELOS_IMAGEM,
+    index=MODELOS_IMAGEM.index(MODELO_INICIAL),
+    help="Escolha um modelo com saída de imagem. O Qwen pode não devolver imagem final."
+)
+
+modelo_manual = st.text_input(
+    "Ou informe manualmente outro modelo",
+    value=""
+)
+
+modelo_final = modelo_manual.strip() if modelo_manual.strip() else modelo
 
 col1, col2 = st.columns(2)
 
 with col1:
     prompt_positivo = st.text_area(
-        "Prompt positivo:",
-        value=PROMPT_LAURA_HQ_BIQUINI,
-        height=230,
+        "Prompt positivo",
+        value=PROMPT_COMIC_PADRAO,
+        height=220,
     )
 
 with col2:
     prompt_negativo = st.text_area(
-        "Prompt negativo:",
-        value=NEGATIVE_HQ_DEFAULT,
-        height=230,
+        "Prompt negativo",
+        value=NEGATIVE_COMIC_PADRAO,
+        height=220,
     )
 
 col_a, col_b, col_c = st.columns(3)
 
 with col_a:
-    qtd = st.slider(
-        "Quantidade de imagens",
-        min_value=1,
-        max_value=4,
-        value=2,
-    )
-
-with col_b:
     tamanho = st.selectbox(
         "Tamanho",
         [
             "1024x1024",
             "768x1024",
             "1024x768",
+            "1536x1024",
+            "1024x1536",
         ],
-        index=0,
-        help="Tamanho enviado para a API LemonFox SDXL.",
+        index=0
+    )
+
+with col_b:
+    qualidade = st.selectbox(
+        "Qualidade",
+        ["auto", "low", "medium", "high"],
+        index=0
     )
 
 with col_c:
-    formato_resposta = st.selectbox(
-        "Formato da resposta",
-        [
-            "url",
-            "b64_json",
-        ],
-        index=0,
-        help=(
-            "url: retorna links temporários das imagens. "
-            "b64_json: retorna a imagem diretamente em base64."
-        ),
+    preservar_fundo = st.checkbox(
+        "Preservar fundo",
+        value=True
     )
 
 st.divider()
 
+with st.expander("Ver prompt final"):
+    st.code(montar_prompt_final(prompt_positivo, prompt_negativo, preservar_fundo))
+
 # =========================
-# BOTÃO DE GERAÇÃO
+# BOTÃO
 # =========================
 
-if st.button("🚀 Gerar imagens da Laura"):
+if st.button("🚀 Transformar em comic book"):
+    if imagem_original is None:
+        st.error("Envie uma imagem primeiro.")
+        st.stop()
+
     if not prompt_positivo.strip():
         st.error("Digite um prompt positivo.")
         st.stop()
 
-    if not LEMONFOX_API_KEY:
-        st.error("LEMONFOX_API_KEY não configurada nos secrets.")
+    if not OPENROUTER_API_KEY:
+        st.error("OPENROUTER_API_KEY não configurada nos secrets.")
         st.stop()
 
     try:
-        st.info("Chamando API LemonFox SDXL...")
+        st.info("Enviando imagem para o OpenRouter...")
 
-        resultado = gerar_imagens_lemonfox(
+        imagens, texto_resposta, bruto = gerar_imagem_de_outra_openrouter(
+            imagem_pil=imagem_original,
             prompt=prompt_positivo,
             negative_prompt=prompt_negativo,
-            n=qtd,
+            model=modelo_final,
             size=tamanho,
-            response_format=formato_resposta,
+            quality=qualidade,
+            preservar_fundo=preservar_fundo,
         )
 
-        if not resultado:
-            st.warning("A LemonFox não retornou imagens.")
+        if not imagens:
+            st.warning(
+                "O modelo respondeu, mas nenhuma imagem foi encontrada na resposta. "
+                "Tente outro modelo com saída de imagem."
+            )
+
+            if texto_resposta:
+                st.markdown("### Resposta textual do modelo")
+                st.write(texto_resposta)
+
+            with st.expander("Ver resposta bruta da API"):
+                st.json(bruto)
+
             st.stop()
 
-        st.success("Imagem(ns) gerada(s) com sucesso! ✅")
+        st.success("Imagem transformada com sucesso! ✅")
 
-        if formato_resposta == "url":
-            for idx, url in enumerate(resultado, start=1):
-                st.markdown(f"### Imagem {idx}")
+        for idx, img in enumerate(imagens, start=1):
+            st.markdown(f"### Resultado {idx}")
+            st.image(img, use_container_width=True)
 
-                try:
-                    img = baixar_imagem_url(url)
+            download_button_from_pil(
+                img,
+                f"comic_book_result_{idx}.png",
+                f"⬇️ Baixar resultado {idx}"
+            )
 
-                    st.image(
-                        img,
-                        use_column_width=True,
-                    )
-
-                    st.caption(
-                        "URL temporária da LemonFox. "
-                        "Normalmente fica disponível por tempo limitado."
-                    )
-
-                    with st.expander("Ver URL da imagem"):
-                        st.code(url)
-
-                    download_button_from_pil(
-                        img,
-                        f"laura_lemonfox_{idx}.png",
-                        f"⬇️ Baixar imagem {idx}",
-                    )
-
-                except Exception as e:
-                    st.error(f"Falha ao baixar a imagem {idx}.")
-                    st.code(str(e))
-
-        else:
-            for idx, img in enumerate(resultado, start=1):
-                st.markdown(f"### Imagem {idx}")
-
-                st.image(
-                    img,
-                    use_column_width=True,
-                )
-
-                download_button_from_pil(
-                    img,
-                    f"laura_lemonfox_{idx}.png",
-                    f"⬇️ Baixar imagem {idx}",
-                )
+        with st.expander("Ver resposta bruta da API"):
+            st.json(bruto)
 
     except Exception as e:
-        st.error(f"Falha ao gerar imagens: {e}")
+        st.error(f"Falha ao gerar imagem: {e}")
