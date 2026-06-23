@@ -78,22 +78,22 @@ MODELOS_OPENROUTER_IMAGEM = [
 # MODELOS HUGGING FACE
 # =========================
 
-MODELO_HF_INICIAL = "Qwen/Qwen-Image-Edit-2509"
+MODELO_HF_INICIAL = "black-forest-labs/FLUX.2-klein-9B"
 
 MODELOS_HF_IMAGEM = [
-    "Qwen/Qwen-Image-Edit-2509",
     "black-forest-labs/FLUX.2-klein-9B",
+    "Qwen/Qwen-Image-Edit-2511",
     "timbrooks/instruct-pix2pix",
     "nitrosocke/comic-diffusion",
     "runwayml/stable-diffusion-v1-5",
     "stabilityai/stable-diffusion-xl-base-1.0",
 ]
 
-HF_PROVIDER_INICIAL = "wavespeed"
+HF_PROVIDER_INICIAL = "replicate"
 
 HF_PROVIDERS = [
-    "wavespeed",
     "replicate",
+    "fal-ai",
 ]
 
 # =========================
@@ -119,6 +119,19 @@ NEGATIVE_COMIC_PADRAO = (
 # =========================
 # FUNÇÕES AUXILIARES
 # =========================
+
+def sugerir_provider_hf(model_id: str) -> str:
+    """
+    Sugere provider Hugging Face de acordo com o modelo.
+    """
+    if model_id == "Qwen/Qwen-Image-Edit-2511":
+        return "fal-ai"
+
+    if model_id == "black-forest-labs/FLUX.2-klein-9B":
+        return "replicate"
+
+    return "replicate"
+
 
 def pil_to_data_url(img: Image.Image, format_: str = "PNG") -> str:
     """
@@ -351,11 +364,7 @@ def gerar_imagem_huggingface_img2img(
 ):
     """
     Chama Hugging Face Inference Providers via huggingface_hub.InferenceClient.
-
-    Observação:
-    Alguns modelos/providers aceitam input_image como primeiro argumento posicional.
-    Outros esperam image=...
-    Por isso a função tenta os dois formatos.
+    Tenta input posicional e depois image=...
     """
     if not HF_TOKEN:
         raise RuntimeError("HF_TOKEN ou HUGGINGFACE_API_KEY não encontrado em st.secrets.")
@@ -377,7 +386,7 @@ def gerar_imagem_huggingface_img2img(
 
     erros = []
 
-    # Tentativa 1 — igual ao exemplo oficial
+    # Tentativa 1 — igual aos exemplos oficiais
     try:
         image = client.image_to_image(
             input_image,
@@ -478,13 +487,6 @@ if provedor == "OpenRouter":
     hf_provider = None
 
 else:
-    hf_provider = st.selectbox(
-        "Provider Hugging Face",
-        HF_PROVIDERS,
-        index=HF_PROVIDERS.index(HF_PROVIDER_INICIAL),
-        help="Provider usado pelo InferenceClient da Hugging Face."
-    )
-
     modelo = st.selectbox(
         "Modelo Hugging Face",
         MODELOS_HF_IMAGEM,
@@ -498,13 +500,42 @@ else:
         placeholder="ex: black-forest-labs/FLUX.2-klein-9B"
     )
 
+    modelo_final_preview = modelo_manual.strip() if modelo_manual.strip() else modelo
+    provider_recomendado = sugerir_provider_hf(modelo_final_preview)
+
+    hf_provider = st.selectbox(
+        "Provider Hugging Face",
+        HF_PROVIDERS,
+        index=HF_PROVIDERS.index(provider_recomendado)
+        if provider_recomendado in HF_PROVIDERS
+        else HF_PROVIDERS.index(HF_PROVIDER_INICIAL),
+        help="Provider usado pelo InferenceClient da Hugging Face."
+    )
+
 modelo_final = modelo_manual.strip() if modelo_manual.strip() else modelo
 
 st.caption(f"Provedor selecionado: `{provedor}`")
 st.caption(f"Modelo selecionado: `{modelo_final}`")
 
 if provedor == "Hugging Face":
+    provider_recomendado = sugerir_provider_hf(modelo_final)
+
     st.caption(f"HF provider selecionado: `{hf_provider}`")
+    st.caption(f"HF provider recomendado para este modelo: `{provider_recomendado}`")
+
+    if modelo_final == "Qwen/Qwen-Image-Edit-2511":
+        st.warning(
+            "Qwen/Qwen-Image-Edit-2511 está disponível como opção experimental. "
+            "Ele usa provider recomendado fal-ai, mas pode falhar no InferenceClient. "
+            "Para estabilidade, prefira black-forest-labs/FLUX.2-klein-9B com replicate."
+        )
+
+    if hf_provider != provider_recomendado:
+        st.warning(
+            f"O provider selecionado foi `{hf_provider}`, mas para `{modelo_final}` "
+            f"o recomendado é `{provider_recomendado}`. "
+            f"Na geração, o app usará `{provider_recomendado}` automaticamente."
+        )
 
 # =========================
 # UI — PROMPTS
@@ -623,7 +654,7 @@ if st.button("🚀 Transformar em comic book"):
         st.stop()
 
     if provedor == "Hugging Face" and not HF_TOKEN:
-        st.error("HF_TOKEN não configurado nos secrets.")
+        st.error("HF_TOKEN ou HUGGINGFACE_API_KEY não configurado nos secrets.")
         st.stop()
 
     try:
@@ -642,12 +673,16 @@ if st.button("🚀 Transformar em comic book"):
             )
 
         else:
+            provider_usado = sugerir_provider_hf(modelo_final)
+
+            st.info(f"HF provider usado: {provider_usado}")
+
             imagens, bruto = gerar_imagem_huggingface_img2img(
                 imagem_pil=imagem_original,
                 prompt=prompt_positivo,
                 negative_prompt=prompt_negativo,
                 model_id=modelo_final,
-                provider=hf_provider,
+                provider=provider_usado,
                 strength=strength,
                 guidance_scale=guidance_scale,
                 preservar_fundo=preservar_fundo,
