@@ -46,7 +46,7 @@ APP_TITLE = st.secrets.get("APP_TITLE", "Comic Book Image Studio")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 HF_IMAGE_TO_IMAGE_URL_TEMPLATE = (
-    "https://api-inference.huggingface.co/models/{model_id}"
+    "https://router.huggingface.co/hf-inference/models/{model_id}"
 )
 
 # =========================
@@ -423,13 +423,24 @@ def gerar_imagem_huggingface_img2img(
         "guidance_scale": str(guidance_scale),
     }
 
-    resp = requests.post(
-        url,
-        headers=headers,
-        files=files,
-        data=data,
-        timeout=300,
-    )
+    try:
+        resp = requests.post(
+            url,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=300,
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(
+            "Falha de conexão com a Hugging Face. "
+            "Verifique se o Streamlit Cloud consegue resolver router.huggingface.co."
+        ) from e
+    except requests.exceptions.Timeout as e:
+        raise RuntimeError(
+            "Tempo esgotado ao chamar a Hugging Face. "
+            "O modelo pode estar carregando, indisponível ou demorando demais."
+        ) from e
 
     content_type = resp.headers.get("content-type", "")
 
@@ -446,16 +457,15 @@ def gerar_imagem_huggingface_img2img(
 
         raise RuntimeError(f"Falha Hugging Face: {resp.status_code}")
 
-    # Muitos endpoints retornam imagem direta
     if content_type.startswith("image/"):
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
         return [img], {
             "provider": "huggingface",
             "model": model_id,
             "content_type": content_type,
+            "url": url,
         }
 
-    # Alguns retornam JSON
     if "application/json" in content_type:
         bruto = resp.json()
         imagens = extract_images_from_huggingface_json(bruto)
