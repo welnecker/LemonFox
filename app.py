@@ -85,6 +85,7 @@ MODELO_HF_INICIAL = "black-forest-labs/FLUX.2-klein-9B"
 MODELOS_HF_IMAGEM = [
     "black-forest-labs/FLUX.2-klein-9B",
     "Qwen/Qwen-Image-Edit-2511",
+    "autoweeb/Qwen-Image-Edit-2509-Photo-to-Anime",
     "timbrooks/instruct-pix2pix",
     "nitrosocke/comic-diffusion",
     "runwayml/stable-diffusion-v1-5",
@@ -96,8 +97,8 @@ HF_PROVIDER_INICIAL = "replicate"
 HF_PROVIDERS = [
     "replicate",
     "fal-ai",
+    "wavespeed",
 ]
-
 # =========================
 # PROMPTS PADRÃO
 # =========================
@@ -530,6 +531,13 @@ if provedor == "Hugging Face":
             "Qwen/Qwen-Image-Edit-2511 está disponível como opção experimental. "
             "Ele usa provider recomendado fal-ai, mas pode falhar no InferenceClient. "
             "Para estabilidade, prefira black-forest-labs/FLUX.2-klein-9B com replicate."
+        )
+
+    if modelo_final == "autoweeb/Qwen-Image-Edit-2509-Photo-to-Anime":
+        st.warning(
+            "Este modelo é um LoRA Photo-to-Anime finetuned do Qwen-Image-Edit-2509. "
+            "O provider recomendado é wavespeed. Se der Bad Request, o problema provavelmente "
+            "é o provider/roteamento, não o app. Use prompt simples, como: transform into anime."
         )
 
     if hf_provider != provider_recomendado:
