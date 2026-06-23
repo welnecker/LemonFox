@@ -280,7 +280,11 @@ arquivo = st.file_uploader(
 
 if arquivo:
     imagem_original = Image.open(arquivo).convert("RGB")
-    st.image(imagem_original, caption="Imagem original", use_container_width=True)
+    st.image(
+        imagem_original,
+        caption="Imagem original",
+        use_column_width=True
+    )
 else:
     imagem_original = None
 
@@ -398,7 +402,7 @@ if st.button("🚀 Transformar em comic book"):
 
         for idx, img in enumerate(imagens, start=1):
             st.markdown(f"### Resultado {idx}")
-            st.image(img, use_container_width=True)
+            st.image(img, use_column_width=True)
 
             download_button_from_pil(
                 img,
