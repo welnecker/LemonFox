@@ -44,6 +44,7 @@ MODELO_INICIAL = "x-ai/grok-imagine-image-quality"
 
 MODELOS_IMAGEM = [
     "x-ai/grok-imagine-image-quality",
+    "black-forest-labs/flux.2-max",    
     "x-ai/grok-imagine-image-quality:free",
     "recraft/recraft-v4.1-pro-vector",
     "qwen/qwen3.7-plus",
