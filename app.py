@@ -45,7 +45,7 @@ MODELO_INICIAL = "x-ai/grok-imagine-image-quality"
 MODELOS_IMAGEM = [
     "x-ai/grok-imagine-image-quality",
     "x-ai/grok-imagine-image-quality:free",
-    "openai/gpt-5.4-image-2",
+    "recraft/recraft-v4.1-pro-vector",
     "qwen/qwen3.7-plus",
 ]
 
