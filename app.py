@@ -127,14 +127,17 @@ def sugerir_provider_hf(model_id: str) -> str:
     """
     Sugere provider Hugging Face de acordo com o modelo.
     """
+
     if model_id == "Qwen/Qwen-Image-Edit-2511":
         return "fal-ai"
+
+    if model_id == "autoweeb/Qwen-Image-Edit-2509-Photo-to-Anime":
+        return "wavespeed"
 
     if model_id == "black-forest-labs/FLUX.2-klein-9B":
         return "replicate"
 
     return "replicate"
-
 
 def pil_to_data_url(img: Image.Image, format_: str = "PNG") -> str:
     """
