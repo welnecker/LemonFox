@@ -35,7 +35,11 @@ st.success("Acesso liberado! ✅")
 # =========================
 
 OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
-HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+
+HF_TOKEN = (
+    st.secrets.get("HF_TOKEN", "")
+    or st.secrets.get("HUGGINGFACE_API_KEY", "")
+)
 
 APP_REFERER = st.secrets.get("APP_REFERER", "https://streamlit.app")
 APP_TITLE = st.secrets.get("APP_TITLE", "Comic Book Image Studio")
