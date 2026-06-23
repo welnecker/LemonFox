@@ -3,6 +3,7 @@ import re
 import base64
 import requests
 from PIL import Image
+from huggingface_hub import InferenceClient
 import streamlit as st
 
 # =========================
@@ -34,7 +35,7 @@ st.success("Acesso liberado! ✅")
 # =========================
 
 OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
-HUGGINGFACE_API_KEY = st.secrets.get("HUGGINGFACE_API_KEY", "")
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
 APP_REFERER = st.secrets.get("APP_REFERER", "https://streamlit.app")
 APP_TITLE = st.secrets.get("APP_TITLE", "Comic Book Image Studio")
@@ -44,10 +45,6 @@ APP_TITLE = st.secrets.get("APP_TITLE", "Comic Book Image Studio")
 # =========================
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-HF_IMAGE_TO_IMAGE_URL_TEMPLATE = (
-    "https://router.huggingface.co/hf-inference/models/{model_id}"
-)
 
 # =========================
 # PROVEDOR
@@ -60,7 +57,7 @@ provedor = st.selectbox(
 )
 
 # =========================
-# MODELOS
+# MODELOS OPENROUTER
 # =========================
 
 MODELO_OPENROUTER_INICIAL = "x-ai/grok-imagine-image-quality"
@@ -73,14 +70,24 @@ MODELOS_OPENROUTER_IMAGEM = [
     "qwen/qwen3.7-plus",
 ]
 
-MODELO_HF_INICIAL = "timbrooks/instruct-pix2pix"
+# =========================
+# MODELOS HUGGING FACE
+# =========================
+
+MODELO_HF_INICIAL = "black-forest-labs/FLUX.2-klein-9B"
 
 MODELOS_HF_IMAGEM = [
+    "black-forest-labs/FLUX.2-klein-9B",
     "timbrooks/instruct-pix2pix",
+    "nitrosocke/comic-diffusion",
     "runwayml/stable-diffusion-v1-5",
     "stabilityai/stable-diffusion-xl-base-1.0",
-    "nitrosocke/comic-diffusion",
-    "lllyasviel/sd-controlnet-canny",
+]
+
+HF_PROVIDER_INICIAL = "replicate"
+
+HF_PROVIDERS = [
+    "replicate",
 ]
 
 # =========================
@@ -178,10 +185,6 @@ def montar_prompt_final(prompt: str, negative_prompt: str, preservar_fundo: bool
 def extract_images_from_openrouter(data: dict) -> list[Image.Image]:
     """
     Extrai imagens da resposta do OpenRouter.
-    Cobre formatos comuns:
-    - message.content como lista multimodal
-    - message.content como texto com data URL
-    - message.images
     """
     imagens = []
 
@@ -216,7 +219,7 @@ def extract_images_from_openrouter(data: dict) -> list[Image.Image]:
                 if isinstance(url, str) and url.startswith("data:image/"):
                     imagens.append(data_url_to_pil(url))
 
-    # Caso 2: content como texto contendo data URL
+    # Caso 2: content como string com data URL
     elif isinstance(content, str):
         encontrados = re.findall(
             r"data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+",
@@ -248,62 +251,8 @@ def extract_images_from_openrouter(data: dict) -> list[Image.Image]:
     return imagens
 
 
-def extract_images_from_huggingface_json(bruto) -> list[Image.Image]:
-    """
-    Tenta extrair imagem de respostas JSON da Hugging Face.
-    Alguns endpoints retornam bytes de imagem; outros podem retornar base64.
-    """
-    imagens = []
-
-    if isinstance(bruto, dict):
-        possiveis_chaves = [
-            "b64_json",
-            "image",
-            "generated_image",
-            "output",
-        ]
-
-        for chave in possiveis_chaves:
-            valor = bruto.get(chave)
-
-            if isinstance(valor, str):
-                if valor.startswith("data:image/"):
-                    imagens.append(data_url_to_pil(valor))
-                else:
-                    try:
-                        imagens.append(base64_puro_para_imagem(valor))
-                    except Exception:
-                        pass
-
-            elif isinstance(valor, list):
-                for item in valor:
-                    if isinstance(item, str):
-                        if item.startswith("data:image/"):
-                            imagens.append(data_url_to_pil(item))
-                        else:
-                            try:
-                                imagens.append(base64_puro_para_imagem(item))
-                            except Exception:
-                                pass
-
-    elif isinstance(bruto, list):
-        for item in bruto:
-            if isinstance(item, dict):
-                imagens.extend(extract_images_from_huggingface_json(item))
-            elif isinstance(item, str):
-                if item.startswith("data:image/"):
-                    imagens.append(data_url_to_pil(item))
-                else:
-                    try:
-                        imagens.append(base64_puro_para_imagem(item))
-                    except Exception:
-                        pass
-
-    return imagens
-
-
 # =========================
-# CHAMADA À API OPENROUTER
+# CHAMADA OPENROUTER
 # =========================
 
 def gerar_imagem_de_outra_openrouter(
@@ -381,7 +330,7 @@ def gerar_imagem_de_outra_openrouter(
 
 
 # =========================
-# CHAMADA À API HUGGING FACE
+# CHAMADA HUGGING FACE — INFERENCECLIENT
 # =========================
 
 def gerar_imagem_huggingface_img2img(
@@ -389,18 +338,20 @@ def gerar_imagem_huggingface_img2img(
     prompt: str,
     negative_prompt: str,
     model_id: str,
+    provider: str = "replicate",
     strength: float = 0.55,
     guidance_scale: float = 7.5,
     preservar_fundo: bool = True,
 ):
-    if not HUGGINGFACE_API_KEY:
-        raise RuntimeError("HUGGINGFACE_API_KEY não encontrado em st.secrets.")
+    """
+    Chama Hugging Face Inference Providers via huggingface_hub.InferenceClient.
 
-    url = HF_IMAGE_TO_IMAGE_URL_TEMPLATE.format(model_id=model_id)
-
-    headers = {
-        "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
-    }
+    Para black-forest-labs/FLUX.2-klein-9B com provider replicate,
+    o exemplo base usa:
+        client.image_to_image(input_image, prompt=..., model=...)
+    """
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
 
     prompt_final = montar_prompt_final(
         prompt=prompt,
@@ -408,70 +359,46 @@ def gerar_imagem_huggingface_img2img(
         preservar_fundo=preservar_fundo,
     )
 
+    # Converte PIL para bytes
     buffer = io.BytesIO()
     imagem_pil.save(buffer, format="PNG")
-    image_bytes = buffer.getvalue()
-
-    files = {
-        "image": ("input.png", image_bytes, "image/png"),
-    }
-
-    data = {
-        "prompt": prompt_final,
-        "negative_prompt": negative_prompt,
-        "strength": str(strength),
-        "guidance_scale": str(guidance_scale),
-    }
+    input_image = buffer.getvalue()
 
     try:
-        resp = requests.post(
-            url,
-            headers=headers,
-            files=files,
-            data=data,
-            timeout=300,
+        client = InferenceClient(
+            provider=provider,
+            api_key=HF_TOKEN,
         )
-    except requests.exceptions.ConnectionError as e:
-        raise RuntimeError(
-            "Falha de conexão com a Hugging Face. "
-            "Verifique se o Streamlit Cloud consegue resolver router.huggingface.co."
-        ) from e
-    except requests.exceptions.Timeout as e:
-        raise RuntimeError(
-            "Tempo esgotado ao chamar a Hugging Face. "
-            "O modelo pode estar carregando, indisponível ou demorando demais."
-        ) from e
 
-    content_type = resp.headers.get("content-type", "")
+        # O retorno esperado é PIL.Image
+        image = client.image_to_image(
+            input_image,
+            prompt=prompt_final,
+            model=model_id,
+        )
 
-    if resp.status_code != 200:
-        st.error(f"Erro Hugging Face — status {resp.status_code}")
+        if not isinstance(image, Image.Image):
+            raise RuntimeError(
+                f"Hugging Face retornou um tipo inesperado: {type(image)}"
+            )
 
-        if "application/json" in content_type:
-            try:
-                st.json(resp.json())
-            except Exception:
-                st.code(resp.text)
-        else:
-            st.code(resp.text)
-
-        raise RuntimeError(f"Falha Hugging Face: {resp.status_code}")
-
-    if content_type.startswith("image/"):
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        return [img], {
+        return [image.convert("RGB")], {
             "provider": "huggingface",
+            "hf_provider": provider,
             "model": model_id,
-            "content_type": content_type,
-            "url": url,
+            "strength": strength,
+            "guidance_scale": guidance_scale,
+            "note": (
+                "Esta chamada usa InferenceClient.image_to_image. "
+                "Dependendo do provider/modelo, strength e guidance_scale podem não ser aplicados."
+            )
         }
 
-    if "application/json" in content_type:
-        bruto = resp.json()
-        imagens = extract_images_from_huggingface_json(bruto)
-        return imagens, bruto
-
-    raise RuntimeError(f"Resposta Hugging Face em formato não reconhecido: {content_type}")
+    except Exception as e:
+        raise RuntimeError(
+            f"Falha ao chamar Hugging Face InferenceClient com provider '{provider}' "
+            f"e modelo '{model_id}': {e}"
+        ) from e
 
 
 # =========================
@@ -518,27 +445,40 @@ if provedor == "OpenRouter":
         placeholder="ex: x-ai/grok-imagine-image-quality"
     )
 
+    hf_provider = None
+
 else:
+    hf_provider = st.selectbox(
+        "Provider Hugging Face",
+        HF_PROVIDERS,
+        index=HF_PROVIDERS.index(HF_PROVIDER_INICIAL),
+        help="Provider usado pelo InferenceClient da Hugging Face."
+    )
+
     modelo = st.selectbox(
         "Modelo Hugging Face",
         MODELOS_HF_IMAGEM,
         index=MODELOS_HF_IMAGEM.index(MODELO_HF_INICIAL),
-        help=(
-            "Modelos chamados pela Hugging Face. "
-            "Nem todo modelo do Hub aceita image-to-image via endpoint direto."
-        )
+        help="Modelo chamado via Hugging Face Inference Providers."
     )
 
     modelo_manual = st.text_input(
         "Ou informe manualmente outro modelo Hugging Face",
         value="",
-        placeholder="ex: timbrooks/instruct-pix2pix"
+        placeholder="ex: black-forest-labs/FLUX.2-klein-9B"
     )
 
 modelo_final = modelo_manual.strip() if modelo_manual.strip() else modelo
 
 st.caption(f"Provedor selecionado: `{provedor}`")
 st.caption(f"Modelo selecionado: `{modelo_final}`")
+
+if provedor == "Hugging Face":
+    st.caption(f"HF provider selecionado: `{hf_provider}`")
+
+# =========================
+# UI — PROMPTS
+# =========================
 
 col1, col2 = st.columns(2)
 
@@ -608,7 +548,8 @@ if provedor == "Hugging Face":
             step=0.05,
             help=(
                 "Baixo preserva mais a imagem original. "
-                "Alto transforma mais, mas pode perder identidade."
+                "Alto transforma mais, mas pode perder identidade. "
+                "Pode ser ignorado por alguns providers."
             )
         )
 
@@ -619,7 +560,10 @@ if provedor == "Hugging Face":
             max_value=15.0,
             value=7.5,
             step=0.5,
-            help="Quanto o modelo obedece ao prompt."
+            help=(
+                "Quanto o modelo obedece ao prompt. "
+                "Pode ser ignorado por alguns providers."
+            )
         )
 
 else:
@@ -648,8 +592,8 @@ if st.button("🚀 Transformar em comic book"):
         st.error("OPENROUTER_API_KEY não configurada nos secrets.")
         st.stop()
 
-    if provedor == "Hugging Face" and not HUGGINGFACE_API_KEY:
-        st.error("HUGGINGFACE_API_KEY não configurada nos secrets.")
+    if provedor == "Hugging Face" and not HF_TOKEN:
+        st.error("HF_TOKEN não configurado nos secrets.")
         st.stop()
 
     try:
@@ -673,6 +617,7 @@ if st.button("🚀 Transformar em comic book"):
                 prompt=prompt_positivo,
                 negative_prompt=prompt_negativo,
                 model_id=modelo_final,
+                provider=hf_provider,
                 strength=strength,
                 guidance_scale=guidance_scale,
                 preservar_fundo=preservar_fundo,
