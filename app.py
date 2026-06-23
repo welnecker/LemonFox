@@ -43,11 +43,10 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELO_INICIAL = "x-ai/grok-imagine-image-quality"
 
 MODELOS_IMAGEM = [
-    "google/gemini-2.5-flash-image-preview",
+    "x-ai/grok-imagine-image-quality",
+    "x-ai/grok-imagine-image-quality:free",
     "openai/gpt-5.4-image-2",
-    "black-forest-labs/flux.2-pro",
-    "black-forest-labs/flux.2-flex",
-    "qwen/qwen3.7-plus",  # deixado aqui, mas pode não gerar imagem de saída
+    "qwen/qwen3.7-plus",
 ]
 
 # =========================
@@ -250,6 +249,14 @@ def gerar_imagem_de_outra_openrouter(
         timeout=300,
     )
 
+    if resp.status_code == 404:
+        st.error(
+            "Erro 404: o modelo escolhido não possui endpoint ativo no OpenRouter. "
+            "Troque para outro modelo, como x-ai/grok-imagine-image-quality."
+        )
+        st.code(resp.text)
+        raise RuntimeError(f"Modelo indisponível no OpenRouter: {model}")
+    
     if resp.status_code != 200:
         st.error(f"Erro da API OpenRouter — status {resp.status_code}")
         st.code(resp.text)
