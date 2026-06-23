@@ -218,7 +218,7 @@ def gerar_imagem_de_outra_openrouter(
 
     payload = {
         "model": model,
-        "modalities": ["image", "text"],
+        "modalities": ["image"],
         "messages": [
             {
                 "role": "user",
@@ -251,12 +251,12 @@ def gerar_imagem_de_outra_openrouter(
 
     if resp.status_code == 404:
         st.error(
-            "Erro 404: o modelo escolhido não possui endpoint ativo no OpenRouter. "
-            "Troque para outro modelo, como x-ai/grok-imagine-image-quality."
+            "Erro 404: o modelo existe, mas não aceitou a modalidade solicitada. "
+            "Para modelos de imagem pura, use modalities=['image'], sem 'text'."
         )
         st.code(resp.text)
-        raise RuntimeError(f"Modelo indisponível no OpenRouter: {model}")
-    
+        raise RuntimeError(f"Modalidade incompatível no OpenRouter: {model}")
+
     if resp.status_code != 200:
         st.error(f"Erro da API OpenRouter — status {resp.status_code}")
         st.code(resp.text)
@@ -265,13 +265,7 @@ def gerar_imagem_de_outra_openrouter(
     data = resp.json()
     imagens = extract_images_from_openrouter(data)
 
-    texto_resposta = ""
-    try:
-        texto_resposta = data["choices"][0]["message"].get("content", "")
-    except Exception:
-        pass
-
-    return imagens, texto_resposta, data
+    return imagens, data
 
 
 # =========================
@@ -380,7 +374,7 @@ if st.button("🚀 Transformar em comic book"):
     try:
         st.info("Enviando imagem para o OpenRouter...")
 
-        imagens, texto_resposta, bruto = gerar_imagem_de_outra_openrouter(
+        imagens, bruto = gerar_imagem_de_outra_openrouter(
             imagem_pil=imagem_original,
             prompt=prompt_positivo,
             negative_prompt=prompt_negativo,
@@ -393,16 +387,12 @@ if st.button("🚀 Transformar em comic book"):
         if not imagens:
             st.warning(
                 "O modelo respondeu, mas nenhuma imagem foi encontrada na resposta. "
-                "Tente outro modelo com saída de imagem."
+                "Veja a resposta bruta abaixo para identificar o formato retornado pelo provedor."
             )
-
-            if texto_resposta:
-                st.markdown("### Resposta textual do modelo")
-                st.write(texto_resposta)
-
+        
             with st.expander("Ver resposta bruta da API"):
                 st.json(bruto)
-
+        
             st.stop()
 
         st.success("Imagem transformada com sucesso! ✅")
