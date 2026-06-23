@@ -352,12 +352,13 @@ def gerar_imagem_huggingface_img2img(
     """
     Chama Hugging Face Inference Providers via huggingface_hub.InferenceClient.
 
-    Para black-forest-labs/FLUX.2-klein-9B com provider replicate,
-    o exemplo base usa:
-        client.image_to_image(input_image, prompt=..., model=...)
+    Observação:
+    Alguns modelos/providers aceitam input_image como primeiro argumento posicional.
+    Outros esperam image=...
+    Por isso a função tenta os dois formatos.
     """
     if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN não encontrado em st.secrets.")
+        raise RuntimeError("HF_TOKEN ou HUGGINGFACE_API_KEY não encontrado em st.secrets.")
 
     prompt_final = montar_prompt_final(
         prompt=prompt,
@@ -365,46 +366,69 @@ def gerar_imagem_huggingface_img2img(
         preservar_fundo=preservar_fundo,
     )
 
-    # Converte PIL para bytes
     buffer = io.BytesIO()
     imagem_pil.save(buffer, format="PNG")
     input_image = buffer.getvalue()
 
-    try:
-        client = InferenceClient(
-            provider=provider,
-            api_key=HF_TOKEN,
-        )
+    client = InferenceClient(
+        provider=provider,
+        api_key=HF_TOKEN,
+    )
 
-        # O retorno esperado é PIL.Image
+    erros = []
+
+    # Tentativa 1 — igual ao exemplo oficial
+    try:
         image = client.image_to_image(
             input_image,
             prompt=prompt_final,
             model=model_id,
         )
 
-        if not isinstance(image, Image.Image):
-            raise RuntimeError(
-                f"Hugging Face retornou um tipo inesperado: {type(image)}"
-            )
+        if isinstance(image, Image.Image):
+            return [image.convert("RGB")], {
+                "provider": "huggingface",
+                "hf_provider": provider,
+                "model": model_id,
+                "method": "positional_input_image",
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+            }
 
-        return [image.convert("RGB")], {
-            "provider": "huggingface",
-            "hf_provider": provider,
-            "model": model_id,
-            "strength": strength,
-            "guidance_scale": guidance_scale,
-            "note": (
-                "Esta chamada usa InferenceClient.image_to_image. "
-                "Dependendo do provider/modelo, strength e guidance_scale podem não ser aplicados."
-            )
-        }
+        erros.append(f"Tentativa posicional retornou tipo inesperado: {type(image)}")
 
     except Exception as e:
-        raise RuntimeError(
-            f"Falha ao chamar Hugging Face InferenceClient com provider '{provider}' "
-            f"e modelo '{model_id}': {e}"
-        ) from e
+        erros.append(f"Tentativa posicional falhou: {repr(e)}")
+
+    # Tentativa 2 — keyword image=...
+    try:
+        image = client.image_to_image(
+            image=input_image,
+            prompt=prompt_final,
+            model=model_id,
+        )
+
+        if isinstance(image, Image.Image):
+            return [image.convert("RGB")], {
+                "provider": "huggingface",
+                "hf_provider": provider,
+                "model": model_id,
+                "method": "keyword_image",
+                "strength": strength,
+                "guidance_scale": guidance_scale,
+            }
+
+        erros.append(f"Tentativa image= retornou tipo inesperado: {type(image)}")
+
+    except Exception as e:
+        erros.append(f"Tentativa image= falhou: {repr(e)}")
+
+    raise RuntimeError(
+        "Falha ao chamar Hugging Face InferenceClient.\n\n"
+        f"Provider: {provider}\n"
+        f"Modelo: {model_id}\n\n"
+        "Erros:\n- " + "\n- ".join(erros)
+    )
 
 
 # =========================
