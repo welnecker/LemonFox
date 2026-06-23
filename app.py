@@ -78,9 +78,10 @@ MODELOS_OPENROUTER_IMAGEM = [
 # MODELOS HUGGING FACE
 # =========================
 
-MODELO_HF_INICIAL = "black-forest-labs/FLUX.2-klein-9B"
+MODELO_HF_INICIAL = "Qwen/Qwen-Image-Edit-2509"
 
 MODELOS_HF_IMAGEM = [
+    "Qwen/Qwen-Image-Edit-2509",
     "black-forest-labs/FLUX.2-klein-9B",
     "timbrooks/instruct-pix2pix",
     "nitrosocke/comic-diffusion",
@@ -88,9 +89,10 @@ MODELOS_HF_IMAGEM = [
     "stabilityai/stable-diffusion-xl-base-1.0",
 ]
 
-HF_PROVIDER_INICIAL = "replicate"
+HF_PROVIDER_INICIAL = "wavespeed"
 
 HF_PROVIDERS = [
+    "wavespeed",
     "replicate",
 ]
 
